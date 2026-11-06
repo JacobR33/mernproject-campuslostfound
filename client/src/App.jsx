@@ -156,7 +156,8 @@ function Shell({ actionLink }) {
       <Header />
       <main className="container" id="main-content">
         <Routes>
-          <Route path="/" element={<Browse />} />
+          <Route path="/" element={protect(<Browse />)} />
+          <Route path="/browse" element={<Browse />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<EmailRequest />} />

@@ -36,7 +36,7 @@ async function mailboxLink(email, subject) {
   return link;
 }
 test('desktop browse is responsive, searchable, keyboard-accessible and has no automated AA violations', async ({ page }) => {
-  await page.goto('/'); await expect(page.getByText('Black campus backpack', { exact: true })).toBeVisible();
+  await page.goto('/browse'); await expect(page.getByText('Black campus backpack', { exact: true })).toBeVisible();
   await page.keyboard.press('Tab'); await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused();
   await page.getByLabel('Search the board').fill('backpack'); await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByText('1 matching post', { exact: true })).toBeVisible();
@@ -47,7 +47,7 @@ test('desktop browse is responsive, searchable, keyboard-accessible and has no a
   await noAxeViolations(page);
 });
 test('mobile navigation, form labels and public pages pass automated AA checks without horizontal overflow', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/'); await expect(page.getByText('Black campus backpack', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/browse'); await expect(page.getByText('Black campus backpack', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole('button', { name: 'Menu', exact: true }).click(); await expect(page.getByRole('button', { name: 'Menu' })).toHaveAttribute('aria-expanded', 'true');
   await noAxeViolations(page); await page.screenshot({ path: '../.tools/previews/phase5-mobile.png', fullPage: true });
@@ -182,7 +182,7 @@ test('reports, admin removal and bans use real authorization and safe text rende
 
 test('password-confirmed account deletion clears cookies and signs out other tabs', async ({ page, context }) => {
   await login(page, 'deleting@ucf.edu');
-  await page.goto('/'); await page.getByRole('link', { name: 'Notebook for account deletion', exact: true }).click(); const postUrl = page.url();
+  await page.goto('/browse'); await page.getByRole('link', { name: 'Notebook for account deletion', exact: true }).click(); const postUrl = page.url();
   const other = await context.newPage(); await other.goto('/my-posts'); await expect(other.getByRole('heading', { name: 'My Posts', exact: true })).toBeVisible();
   await page.goto('/settings'); await page.setViewportSize({ width: 390, height: 844 });
   await page.getByLabel('Current password', { exact: true }).fill(password); await page.getByLabel('Type DELETE to confirm').fill('DELETE'); await noAxeViolations(page);
