@@ -4,6 +4,42 @@ const response = (status, data = null) => ({ status, ok: status < 400, json: asy
 const json = (status, data) => Promise.resolve(response(status, data));
 const lock = { request: jest.fn((name, work) => work()) };
 
+test('admin deletion never retries a password failure or signs the administrator out', async () => {
+  const target = 'a'.repeat(24);
+  let allowed = false;
+  const fetchImpl = jest.fn(path => path.endsWith('/csrf') ? json(200, { csrfToken }) :
+    path === `/api/admin/users/${target}` ? json(allowed ? 204 : 401, {}) : json(200, { user: { id: 'admin' } }));
+  const api = createApiClient({ fetchImpl, locks: lock });
+  const observer = jest.fn();
+  api.subscribe(observer);
+  await api.session();
+  observer.mockClear();
+  await expect(api.adminDeleteAccount(target, { password: 'wrong', confirmation: 'DELETE' })).rejects.toMatchObject({ status: 401 });
+  expect(fetchImpl.mock.calls.filter(([path]) => path === `/api/admin/users/${target}`)).toHaveLength(1);
+  expect(fetchImpl.mock.calls.some(([path]) => path.endsWith('/refresh'))).toBe(false);
+  allowed = true;
+  await api.adminDeleteAccount(target, { password: 'correct fixture', confirmation: 'DELETE' });
+  expect(observer).not.toHaveBeenCalled();
+  await expect(api.adminDeleteAccount('../other', {})).rejects.toMatchObject({ status: 0 });
+});
+
+test('admin deletion cannot dispatch after an account switch during CSRF acquisition', async () => {
+  let resolveCsrf, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const fetchImpl = jest.fn(path => path.endsWith('/csrf')
+    ? new Promise(resolve => { resolveCsrf = resolve; started(); })
+    : json(200, { user: { id: 'admin' } }));
+  const channel = { postMessage: jest.fn() };
+  const api = createApiClient({ fetchImpl, locks: lock, channel });
+  await api.session();
+  const pending = api.adminDeleteAccount('a'.repeat(24), { password: 'private password', confirmation: 'DELETE' });
+  await ready;
+  channel.onmessage({ data: { type: 'session-changed' } });
+  resolveCsrf(response(200, { csrfToken }));
+  await expect(pending).rejects.toMatchObject({ status: 401 });
+  expect(fetchImpl.mock.calls.some(([path]) => path.startsWith('/api/admin/'))).toBe(false);
+});
+
 test.each(['post', 'mfa', 'delete', 'socket'])('a session switch during CSRF acquisition blocks stale %s dispatch', async kind => {
   let resolveCsrf, started, switched = false;
   const ready = new Promise(resolve => { started = resolve; });

@@ -13,3 +13,5 @@ coverage/
 *.pfx
 test-results/
 playwright-report/
+ADMIN.md
+SECURITY.md

@@ -15,6 +15,12 @@
 body {
   margin: 0;
 }
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
 button,
 input,
 textarea,
@@ -102,7 +108,7 @@ hr {
   margin-inline: auto;
 }
 main.container {
-  min-height: 65vh;
+  flex: 1 0 auto;
   padding-block: 3rem 5rem;
 }
 .skip-link {
@@ -1342,4 +1348,27 @@ dialog .actions {
 .checkbox-label input {
   width: 1.1rem;
   height: 1.1rem;
+}
+/* Let account tables scroll on small screens without widening the page. */
+.admin-table-scroll {
+  overflow-x: auto;
+  margin-block: 1rem;
+}
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.admin-table th,
+.admin-table td {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border, #d6d6d6);
+  vertical-align: top;
+}
+.admin-table td:first-child {
+  overflow-wrap: anywhere;
+}
+.admin-actions {
+  flex-wrap: wrap;
+  margin-block: 1rem;
 }

@@ -1,3 +1,4 @@
+import { AdminAccounts, AdminAccountReview, AdminActivity } from './AdminAccounts';
 import { FactorField } from './MfaSettings';
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -167,64 +168,32 @@ export function DeleteAccount() {
   );
 }
 
-function AdminUser({ id, onDone }) {
-  const resource = useResource(id, (signal) =>
-    api.get(`/api/admin/users/${id}`, { auth: true, signal })
-  );
-  const action = useAction();
-  const [confirm, setConfirm] = useState(false);
-  const user = resource.data?.user;
+export function Admin() {
+  const [section, setSection] = useState('reports');
   return (
-    <section className="surface editor">
-      <h2>Account moderation</h2>
-      <ResourceState resource={resource}>
-        {user && (
-          <>
-            <p>
-              <strong>{user.displayName}</strong> ({user.role})
-            </p>
-            <p>
-              Account ID: <code className="wrap-id">{user.id}</code>
-            </p>
-            {user.isBanned ? (
-              <Notice>This account is banned.</Notice>
-            ) : user.role === 'admin' ? (
-              <Notice>Administrator roles are managed by the server operator.</Notice>
-            ) : (
-              <button className="button danger" onClick={() => setConfirm(true)}>
-                Ban account
-              </button>
-            )}
-          </>
-        )}
-      </ResourceState>
-      <button className="text-button" onClick={onDone}>
-        Close account review
-      </button>
-      {confirm && (
-        <Confirm
-          title="Ban this account?"
-          label="Ban account"
-          pending={action.pending}
-          error={action.error}
-          onCancel={() => setConfirm(false)}
-          onConfirm={() =>
-            action.run(async (signal) => {
-              await api.post(`/api/admin/users/${id}/ban`, {}, { auth: true, signal });
-              setConfirm(false);
-              resource.reload();
-            })
-          }
-        >
-          This revokes sessions, hides the account's posts, and disables its conversations. Bans
-          cannot be reversed from this interface.
-        </Confirm>
+    <>
+      <PageTitle description="Manage accounts, review reports, and inspect administrator actions.">
+        Admin panel
+      </PageTitle>
+      <div className="tabs" aria-label="Admin sections">
+        {['reports', 'accounts', 'activity'].map((value) => (
+          <button key={value} aria-pressed={section === value} onClick={() => setSection(value)}>
+            {value === 'reports' ? 'Reports' : value === 'accounts' ? 'Accounts' : 'Activity log'}
+          </button>
+        ))}
+      </div>
+      {section === 'reports' ? (
+        <AdminReports />
+      ) : section === 'accounts' ? (
+        <AdminAccounts />
+      ) : (
+        <AdminActivity />
       )}
-    </section>
+    </>
   );
 }
 
-export function Admin() {
+function AdminReports() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('open');
   const [selectedUser, setSelectedUser] = useState('');
@@ -288,7 +257,11 @@ export function Admin() {
       </div>
       <Notice error>{action.error}</Notice>
       {selectedUser && (
-        <AdminUser key={selectedUser} id={selectedUser} onDone={() => setSelectedUser('')} />
+        <AdminAccountReview
+          key={selectedUser}
+          id={selectedUser}
+          onDone={() => setSelectedUser('')}
+        />
       )}
       <ResourceState resource={resource}>
         {resource.data && (

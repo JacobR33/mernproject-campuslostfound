@@ -291,6 +291,25 @@ export function createApiClient({
         publish(null, true, true);
       });
     },
+    adminDeleteAccount(userId, body, signal) {
+      if (!/^[a-f0-9]{24}$/.test(userId)) {
+        return Promise.reject(new ApiError(0, 'Invalid account.'));
+      }
+      const observed = generation;
+      return lock(async () => {
+        // A bad administrator password must not trigger automatic refresh/replay.
+        const result = await sendRequestWithCsrf(
+          `/api/admin/users/${userId}`,
+          { method: 'DELETE', body, signal },
+          true,
+          observed
+        );
+        if (observed !== generation) {
+          throw new ApiError(401, 'Your session changed. Reload the admin panel.');
+        }
+        return result;
+      });
+    },
     mfaChange(action, body, signal) {
       if (!['enrollment', 'confirm', 'backup-codes', 'disable'].includes(action)) {
         return Promise.reject(new ApiError(0, 'Invalid security action.'));

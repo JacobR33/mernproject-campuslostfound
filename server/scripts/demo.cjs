@@ -155,7 +155,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=${username}
-WorkingDirectory="${serverDirectory}"
+WorkingDirectory=${serverDirectory}
 ExecStart="${process.execPath}" "${path.join(serverDirectory, 'src/index.js')}"
 Restart=on-failure
 RestartSec=5
@@ -171,12 +171,13 @@ WantedBy=multi-user.target
     input: unit,
     stdio: ['pipe', 'ignore', 'inherit'],
   });
+  command('sudo', ['systemd-analyze', 'verify', `/etc/systemd/system/${serviceName}`]);
   command('sudo', ['systemctl', 'daemon-reload']);
-  command('sudo', ['systemctl', 'enable', '--now', serviceName]);
-  console.log(
-    '\nBackground service installed. It survives SSH disconnects and starts after reboot.'
-  );
+  command('sudo', ['systemctl', 'enable', serviceName]);
   await start();
+  console.log(
+    '\nBackground service is running and checked. It survives SSH disconnects and starts after reboot.'
+  );
 }
 
 async function start() {

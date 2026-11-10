@@ -8,6 +8,7 @@ const { pagination } = require('../validation/chat');
 const { moderationController } = require('../controllers/moderationController');
 const { accountController } = require('../controllers/accountController');
 const { codeSchema } = require('../lib/mfa');
+const { adminAccountController } = require('../controllers/adminAccountController');
 const wrap = (action) => (req, res, next) => Promise.resolve(action(req, res)).catch(next);
 const param = (name) => z.object({ [name]: objectId }).strict();
 function moderationRoutes(config, { logger }) {
@@ -15,6 +16,76 @@ function moderationRoutes(config, { logger }) {
   const auth = authenticate(config);
   const admin = requireRole('admin');
   const controller = moderationController(logger);
+  const accounts = adminAccountController(config, logger);
+  router.get(
+    '/admin/users',
+    auth,
+    admin,
+    rateLimit('admin-read', 120),
+    validate({
+      query: pagination.extend({
+        search: z.string().trim().max(120).optional(),
+        status: z.enum(['verified', 'unverified', 'banned', 'locked']).optional(),
+        role: z.enum(['user', 'admin']).optional(),
+      }),
+    }),
+    wrap(accounts.list)
+  );
+  router.get(
+    '/admin/activity',
+    auth,
+    admin,
+    rateLimit('admin-read', 120),
+    validate({
+      query: pagination.extend({ userId: objectId.optional() }),
+    }),
+    wrap(accounts.activity)
+  );
+  router.post(
+    '/admin/users/:userId/email/:kind',
+    auth,
+    admin,
+    rateLimit('admin-mail', 10),
+    validate({
+      params: z
+        .object({ userId: objectId, kind: z.enum(['verification', 'password-reset']) })
+        .strict(),
+    }),
+    wrap(accounts.sendEmail)
+  );
+  router.post(
+    '/admin/users/:userId/:action(unban|unlock|revoke-sessions)',
+    auth,
+    admin,
+    rateLimit('admin-action', 60),
+    validate({
+      params: z
+        .object({ userId: objectId, action: z.enum(['unban', 'unlock', 'revoke-sessions']) })
+        .strict(),
+    }),
+    wrap(accounts.update)
+  );
+  router.delete(
+    '/admin/users/:userId',
+    auth,
+    admin,
+    rateLimit('admin-delete', 5),
+    validate({
+      params: param('userId'),
+      body: z
+        .object({
+          password: z
+            .string()
+            .min(1)
+            .max(72)
+            .refine((value) => Buffer.byteLength(value) <= 72 && !value.includes('\0')),
+          confirmation: z.literal('DELETE'),
+          code: codeSchema.optional(),
+        })
+        .strict(),
+    }),
+    wrap(accounts.remove)
+  );
   router.post(
     '/posts/:postId/reports',
     validate({
@@ -70,7 +141,7 @@ function moderationRoutes(config, { logger }) {
     auth,
     admin,
     rateLimit('admin-read', 120),
-    wrap(controller.user)
+    wrap(accounts.detail)
   );
   router.post(
     '/admin/users/:userId/ban',

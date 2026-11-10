@@ -52,6 +52,137 @@ beforeAll(async () => {
 beforeEach(async () => { for (const model of allModels) await model.deleteMany({}); logger.mockClear(); });
 afterAll(async () => { await mongoose.disconnect(); if (mongo) await mongo.stop(); });
 
+test('account directory searches literal text, paginates, and exposes only admin account metadata', async () => {
+  const admin = await actor({ role: 'admin' });
+  const target = await actor({ displayName: 'Account [demo]', emailVerified: false, failedLoginCount: 3, verificationTokenHash: token() });
+  const full = await User.findById(target.user._id).select('+email');
+  const result = await get(admin, '/api/admin/users?search=%5Bdemo%5D&limit=1');
+  expect(result.status).toBe(200);
+  expect(result.body.pagination.total).toBe(1);
+  expect(result.body.users[0]).toMatchObject({ email: full.email, emailVerified: false, failedLoginCount: 3 });
+  const output = JSON.stringify(result.body);
+  for (const secret of ['passwordHash', 'verificationTokenHash', 'authVersion', 'secretEncrypted', 'backupCodeHashes']) expect(output).not.toContain(secret);
+  expect((await get(admin, `/api/admin/users?search=${encodeURIComponent(full.email)}`)).body.users).toHaveLength(1);
+  expect((await get(admin, '/api/admin/users?status=unverified')).body.pagination.total).toBe(1);
+  expect((await get(admin, '/api/admin/users?search=.*')).body.pagination.total).toBe(0);
+  expect((await get(admin, '/api/admin/users?limit=1000')).status).toBe(400);
+  expect((await get(admin, '/api/admin/users?role=superadmin')).status).toBe(400);
+  expect((await get(admin, `/api/admin/users/${target.user._id}`)).body.user.email).toBe(full.email);
+  expect(JSON.stringify(logger.mock.calls)).not.toContain(full.email);
+});
+
+test('account management endpoints enforce role, CSRF, and current administrator privileges', async () => {
+  const normal = await actor(), admin = await actor({ role: 'admin' });
+  for (const url of ['/api/admin/users', '/api/admin/activity']) {
+    expect((await get(normal, url)).status).toBe(403);
+    expect((await request(app).get(url)).status).toBe(401);
+  }
+  const urls = ['unlock', 'unban', 'revoke-sessions', 'email/verification', 'email/password-reset'];
+  for (const suffix of urls) {
+    const url = `/api/admin/users/${normal.user._id}/${suffix}`;
+    expect((await mutate(normal, 'post', url)).status).toBe(403);
+    expect((await request(app).post(url).set(admin.headers).send({})).status).toBe(403);
+  }
+  expect((await mutate(normal, 'delete', `/api/admin/users/${admin.user._id}`, { password, confirmation: 'DELETE' })).status).toBe(403);
+  await User.updateOne({ _id: admin.user._id }, { $set: { role: 'user' } });
+  expect((await get(admin, '/api/admin/users')).status).toBe(403);
+});
+
+test('unlock, revoke sessions, and unban invalidate old sessions and record actions', async () => {
+  const admin = await actor({ role: 'admin' });
+  const target = await actor({ failedLoginCount: 7, lockUntil: new Date(Date.now() + 60000) });
+  const base = `/api/admin/users/${target.user._id}`;
+  expect((await get(admin, '/api/admin/users?status=locked')).body.pagination.total).toBe(1);
+  expect((await mutate(admin, 'post', `${base}/unlock`)).status).toBe(204);
+  let account = await User.findById(target.user._id).select('+failedLoginCount +lockUntil +authVersion');
+  expect(account.failedLoginCount).toBe(0); expect(account.lockUntil).toBeNull();
+  expect((await get(target, '/api/auth/me')).status).toBe(401);
+  expect((await AuthSession.findById(target.sid)).revoked).toBe(true);
+  expect((await mutate(admin, 'post', `${base}/revoke-sessions`)).status).toBe(204);
+  expect((await mutate(admin, 'post', `${base}/ban`)).status).toBe(204);
+  expect((await mutate(admin, 'post', `${base}/unban`)).status).toBe(204);
+  account = await User.findById(target.user._id).select('+authVersion');
+  expect(account.isBanned).toBe(false); expect(account.authVersion).toBe(4);
+  expect((await get(target, '/api/auth/me')).status).toBe(401);
+  const activity = await get(admin, `/api/admin/activity?userId=${target.user._id}`);
+  expect(activity.status).toBe(200);
+  expect(activity.body.events.map(row => row.action)).toEqual(expect.arrayContaining(['user_unlocked', 'user_sessions_revoked', 'user_banned', 'user_unbanned']));
+});
+
+test('administrator emails rotate tokens and queue encrypted delivery atomically', async () => {
+  const admin = await actor({ role: 'admin' }), target = await actor({ emailVerified: false });
+  const base = `/api/admin/users/${target.user._id}/email`;
+  const first = await mutate(admin, 'post', `${base}/verification`);
+  expect(first.status).toBe(202);
+  const { decryptMessage } = require('../src/lib/mailQueue');
+  const job = await MailOutbox.findOne().select('+payloadEncrypted');
+  const message = decryptMessage(job.payloadEncrypted, config);
+  expect(message.text).toContain(`${config.CLIENT_ORIGIN}/verify-email#token=`);
+  expect(JSON.stringify(first.body)).not.toContain('token=');
+  const before = await User.findById(target.user._id).select('+verificationTokenHash');
+  const spy = jest.spyOn(Audit, 'create').mockRejectedValueOnce(new Error('Audit failed'));
+  expect((await mutate(admin, 'post', `${base}/verification`)).status).toBe(500);
+  spy.mockRestore();
+  expect((await User.findById(target.user._id).select('+verificationTokenHash')).verificationTokenHash).toBe(before.verificationTokenHash);
+  expect(await MailOutbox.countDocuments()).toBe(1);
+  expect((await mutate(admin, 'post', `${base}/password-reset`)).status).toBe(202);
+  await User.updateOne({ _id: target.user._id }, { $set: { emailVerified: true } });
+  expect((await mutate(admin, 'post', `${base}/verification`)).status).toBe(409);
+});
+
+test('administrators cannot mutate administrator accounts, elevate roles, or delete without reauthentication', async () => {
+  const admin = await actor({ role: 'admin' }), otherAdmin = await actor({ role: 'admin' }), target = await actor();
+  for (const account of [admin, otherAdmin]) {
+    const base = `/api/admin/users/${account.user._id}`;
+    for (const suffix of ['unlock', 'unban', 'revoke-sessions', 'email/verification']) {
+      expect((await mutate(admin, 'post', `${base}/${suffix}`)).status).toBe(404);
+    }
+    expect((await mutate(admin, 'delete', base, { password, confirmation: 'DELETE' })).status).toBe(404);
+  }
+  const base = `/api/admin/users/${target.user._id}`;
+  expect((await mutate(admin, 'post', `${base}/unlock`, { role: 'admin' })).status).toBe(400);
+  expect((await mutate(admin, 'delete', base, { password: 'wrong', confirmation: 'DELETE' })).status).toBe(401);
+  expect((await mutate(admin, 'delete', base, { password, confirmation: 'delete' })).status).toBe(400);
+  expect(await User.exists({ _id: target.user._id })).not.toBeNull();
+});
+
+test('admin deletion cleans related data, preserves audit history, and keeps the administrator signed in', async () => {
+  const admin = await actor({ role: 'admin' }), target = await actor(), p = await post(target);
+  await Audit.create({ actor: admin.user._id, target: target.user._id, action: 'user_unlocked' });
+  const result = await mutate(admin, 'delete', `/api/admin/users/${target.user._id}`, { password, confirmation: 'DELETE' });
+  expect(result.status).toBe(204);
+  expect(await User.findById(target.user._id)).toBeNull();
+  expect(await AuthSession.countDocuments({ user: target.user._id })).toBe(0);
+  expect((await Post.findById(p._id)).deletedAt).not.toBeNull();
+  expect(await Audit.countDocuments({ target: target.user._id })).toBe(2);
+  expect((await get(admin, '/api/auth/me')).status).toBe(200);
+  expect((await get(target, '/api/auth/me')).status).toBe(401);
+});
+
+test('admin deletion rolls back account cleanup if audit storage fails', async () => {
+  const admin = await actor({ role: 'admin' }), target = await actor(), p = await post(target);
+  const spy = jest.spyOn(Audit, 'create').mockRejectedValueOnce(new Error('Audit failed'));
+  expect((await mutate(admin, 'delete', `/api/admin/users/${target.user._id}`, { password, confirmation: 'DELETE' })).status).toBe(500);
+  spy.mockRestore();
+  expect(await User.findById(target.user._id)).not.toBeNull();
+  expect((await Post.findById(p._id)).deletedAt).toBeNull();
+  expect(await AuthSession.exists({ user: target.user._id })).not.toBeNull();
+});
+
+test('MFA-enabled administrators must provide a fresh factor to delete an account', async () => {
+  const { encryptSecret, authenticator } = require('../src/lib/mfa');
+  const admin = await actor({ role: 'admin' }), target = await actor();
+  const secret = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+  await User.updateOne({ _id: admin.user._id }, { $set: {
+    'mfa.enabled': true, 'mfa.secretEncrypted': encryptSecret(secret, admin.user._id, 'active', config),
+  } });
+  await AuthSession.updateOne({ _id: admin.sid }, { $set: { mfaAuthenticated: true } });
+  const url = `/api/admin/users/${target.user._id}`;
+  expect((await get(admin, `/api/admin/users/${admin.user._id}`)).body.user.mfaEnabled).toBe(true);
+  expect((await mutate(admin, 'delete', url, { password, confirmation: 'DELETE' })).status).toBe(401);
+  expect((await mutate(admin, 'delete', url, { password, confirmation: 'DELETE', code: authenticator(secret).generate() })).status).toBe(204);
+});
+
 test('reports are private, deduplicated and never overwrite the first submission', async () => {
   const owner = await actor(), reporter = await actor(), admin = await actor({ role: 'admin' }), p = await post(owner, 'found');
   const results = await Promise.all([report(reporter, p), report(reporter, p)]); expect(results.map(r => r.status)).toEqual([202, 202]);
@@ -140,7 +271,9 @@ test('audit insertion failure rolls back post removal and report resolution', as
 test('banning revokes all families, tokens and public post visibility without exposing email', async () => {
   const admin = await actor({ role: 'admin' }), target = await actor(), p = await post(target);
   await User.updateOne({ _id: target.user._id }, { $set: { resetTokenHash: token(), verificationTokenHash: token() } });
-  const userResponse = await get(admin, `/api/admin/users/${target.user._id}`); expect(Object.keys(userResponse.body.user).sort()).toEqual(['displayName', 'id', 'isBanned', 'role']);
+  const userResponse = await get(admin, `/api/admin/users/${target.user._id}`);
+  expect(userResponse.body.user.emailVerified).toBe(true);
+  for (const secret of ['passwordHash', 'authVersion', 'resetTokenHash', 'verificationTokenHash', 'mfa']) expect(userResponse.body.user[secret]).toBeUndefined();
   expect((await mutate(admin, 'post', `/api/admin/users/${target.user._id}/ban`)).status).toBe(204);
   expect((await get(target, '/api/auth/me')).status).toBe(401); expect((await mutate(target, 'post', '/api/auth/refresh')).status).toBe(401);
   expect((await mutate(target, 'post', '/api/auth/login', { email: `moderation${serial}@ucf.edu`, password })).status).toBe(401);

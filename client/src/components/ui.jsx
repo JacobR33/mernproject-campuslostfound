@@ -195,6 +195,7 @@ export function Confirm({
   onConfirm,
   pending,
   error,
+  disabled = false,
   label = 'Confirm',
 }) {
   const ref = useRef();
@@ -216,13 +217,13 @@ export function Confirm({
       }}
     >
       <h2 id={id}>{title}</h2>
-      <p>{children}</p>
+      <div>{children}</div>
       <Notice error>{error}</Notice>
       <div className="actions">
         <button className="button secondary" disabled={pending} onClick={onCancel}>
           Cancel
         </button>
-        <button className="button danger" disabled={pending} onClick={onConfirm}>
+        <button className="button danger" disabled={pending || disabled} onClick={onConfirm}>
           {pending ? 'Please wait…' : label}
         </button>
       </div>

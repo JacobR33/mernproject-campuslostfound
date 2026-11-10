@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "jest --runInBand",
-    "db:indexes": "node scripts/create-indexes.js"
+    "db:indexes": "node scripts/create-indexes.js",
+    "admin:grant": "node scripts/grant-admin.cjs"
   },
   "dependencies": {
     "bcryptjs": "3.0.3",

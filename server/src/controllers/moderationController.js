@@ -14,12 +14,6 @@ const page = (query, total) => ({
   total,
   pages: Math.ceil(total / query.limit),
 });
-const userDTO = (user) => ({
-  id: String(user._id),
-  displayName: user.displayName,
-  role: user.role,
-  isBanned: user.isBanned,
-});
 function moderationController(logger) {
   const audit = async (req, session, action, target) =>
     Audit.create([{ actor: req.user._id, target, action }], { session });
@@ -150,15 +144,6 @@ function moderationController(logger) {
       });
       log(req, 'post_removed');
       res.status(204).end();
-    },
-    async user(req, res) {
-      const user = await User.findById(req.validated.params.userId).select(
-        'displayName role isBanned'
-      );
-      if (!user) {
-        throw httpError(404, 'Not found');
-      }
-      res.json({ user: userDTO(user) });
     },
     async ban(req, res) {
       await withTransaction(async (session) => {

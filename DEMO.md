@@ -127,6 +127,11 @@ bash demo.sh logs
 ```
 
 - `Unit ... not found`: complete the one-time `bash demo.sh setup` step.
+- `bad unit file setting`: run
+  `sudo systemd-analyze verify /etc/systemd/system/campus-lost-found-demo.service`.
+  An older helper incorrectly quoted `WorkingDirectory`. Use the corrected
+  helper from this revision before rerunning setup; `WorkingDirectory` should
+  contain the absolute server directory without surrounding quotes.
 - `Port 4000 is already in use`: stop the old foreground backend, then rerun setup.
 - `This request was not allowed`: check `CLIENT_ORIGIN` and restart the service
   after changing `.env`: `sudo systemctl restart campus-lost-found-demo`.
