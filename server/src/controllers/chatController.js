@@ -1,4 +1,7 @@
-const { Conversation, Message } = require('../models');
+const { lockActor } = require('../lib/lockActor');
+const { withTransaction } = require('../lib/transaction');
+const { httpError } = require('../lib/httpError');
+const { Conversation, Message, Post } = require('../models');
 const { trusted } = require('mongoose');
 const {
   accessPipeline,
@@ -8,6 +11,25 @@ const {
 } = require('../services/conversations');
 const { pageDTO } = require('./claimController');
 const chatController = {
+  async close(req, res) {
+    await withTransaction(async (session) => {
+      await lockActor(session, req.user, req.auth.version);
+      const access = await accessConversation(req.user._id, req.validated.params.conversationId, session);
+      const post = await Post.updateOne(
+        { _id: access.post._id, deletedAt: null, expiresAt: trusted({ $gt: new Date() }) },
+        { $inc: { chatVersion: 1 } },
+        { session }
+      );
+      if (!post.matchedCount) throw httpError(404, 'Not found');
+      const closed = await Conversation.updateOne(
+        { _id: access._id, participants: req.user._id, closedAt: null },
+        { $set: { closedAt: new Date() } },
+        { session }
+      );
+      if (!closed.matchedCount) throw httpError(409, 'Conversation already closed');
+    });
+    res.status(204).end();
+  },
   async list(req, res) {
     const query = req.validated.query;
     const [page] = await Conversation.aggregate([

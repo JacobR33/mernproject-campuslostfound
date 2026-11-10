@@ -17,7 +17,7 @@ export const formatDate = (value) =>
     : 'Not specified';
 export const safeNext = (value) =>
   typeof value === 'string' &&
-  /^\/(?:my-posts|my-claims|notifications|settings|admin|(?:found|lost)\/new|posts\/[a-f0-9]{24}(?:\/(?:claim|edit|review|match))?|chat(?:\/[a-f0-9]{24})?)?$/.test(
+  /^\/(?:my-posts|my-claims|notifications|settings|admin|(?:found|lost)\/new|claims\/[a-f0-9]{24}|posts\/[a-f0-9]{24}(?:\/(?:claim|edit|review|match))?|chat(?:\/[a-f0-9]{24})?)?$/.test(
     value
   )
     ? value

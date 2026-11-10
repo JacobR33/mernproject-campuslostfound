@@ -58,7 +58,7 @@ async function eraseAccountData(user, session, { preserveAudit = false } = {}) {
   await Claim.deleteMany({ $or: [{ claimant: user._id }, { post: inOwn }] }, { session });
   await MatchRequest.deleteMany({ $or: [{ requester: user._id }, { post: inOwn }] }, { session });
   await Notification.deleteMany(
-    { $or: [{ recipient: user._id }, { post: inOwn }, { claim: claimIds }] },
+    { $or: [{ recipient: user._id }, { post: inOwn }, { claim: claimIds }, { claim: matchIds }] },
     { session }
   );
   await Report.deleteMany({ $or: [{ reporter: user._id }, { post: inOwn }] }, { session });

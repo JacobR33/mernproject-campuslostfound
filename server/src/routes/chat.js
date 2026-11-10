@@ -21,6 +21,13 @@ function chatRoutes(config, { logger }) {
     rateLimit('chat-read', 120),
     wrap(chatController.list)
   );
+  router.post(
+    '/conversations/:conversationId/close',
+    validate({ params: conversation, body: z.object({}).strict() }),
+    auth,
+    rateLimit('chat-close', 60),
+    wrap(chatController.close)
+  );
   router.get(
     '/conversations/:conversationId',
     validate({ params: conversation }),
@@ -39,7 +46,7 @@ function chatRoutes(config, { logger }) {
     '/posts/:postId/matches',
     validate({ params: post }),
     auth,
-    rateLimit('match-request', 10),
+    rateLimit('match-request', 10, 60000, { perUser: true }),
     wrap(matches.request)
   );
   router.get(

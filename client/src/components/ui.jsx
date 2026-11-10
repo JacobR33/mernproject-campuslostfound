@@ -89,7 +89,7 @@ export function Field({ label, hint, children, ...props }) {
   );
 }
 export function Status({ value }) {
-  return <span className={`status status-${value}`}>{titleCase(value)}</span>;
+  return <span className={`status status-${value}`}>{value === 'claim_pending' ? 'Conversation active' : titleCase(value)}</span>;
 }
 export function Empty({ title, children, action }) {
   return (

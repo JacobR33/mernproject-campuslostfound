@@ -68,7 +68,7 @@ test('real HTTPS cookies stay HttpOnly/Secure and two tabs renew shared refresh 
   const responses = []; context.on('response', response => { if (response.url().endsWith('/api/auth/refresh')) responses.push(response.status()); });
   await context.clearCookies({ name: '__Host-ucf_access' });
   const a = await context.newPage(), b = await context.newPage(); await Promise.all([a.goto('/my-claims'), b.goto('/notifications')]);
-  await expect(a.getByRole('heading', { name: 'My Claims', exact: true })).toBeVisible(); await expect(b.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible();
+  await expect(a.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible(); await expect(b.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible();
   expect(responses.filter(status => status === 200)).toHaveLength(1); expect(responses).not.toContain(401);
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(a).toHaveURL(/\/login$/); await expect(b).toHaveURL(/\/login$/);
@@ -98,26 +98,25 @@ test('lost post creation, literal text rendering, owner edit and confirmed delet
   await expect(page.getByRole('dialog')).toBeVisible(); await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0);
   await edited.getByRole('button', { name: 'Delete', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Delete post', exact: true }).click(); await expect(page.getByText('Edited notebook from browser test')).toHaveCount(0);
 });
-test('found upload, private claim, finder approval, notifications and physical return work end to end', async ({ browser }) => {
+test('found upload, conversation acceptance, notifications and physical return work end to end', async ({ browser }) => {
   const options = { baseURL: 'https://localhost:5473', ignoreHTTPSErrors: true, timezoneId: 'America/New_York' };
   const finderContext = await browser.newContext(options), claimantContext = await browser.newContext(options);
   const finder = await finderContext.newPage(), claimant = await claimantContext.newPage();
   try {
     await login(finder, 'finder@ucf.edu'); await finder.goto('/found/new');
     await finder.getByLabel('Category', { exact: true }).selectOption('bags'); await finder.getByLabel('Short title').fill('Recovered camera pouch'); await finder.getByLabel('Public description', { exact: true }).fill('A camera pouch found around campus.'); await finder.getByLabel('Campus area').fill('Main Campus');
-    await finder.getByLabel('Verification question 1').fill('What color is the lining?'); await finder.getByLabel('Private answer 1').fill('Navy blue'); await finder.getByLabel('Verification question 2').fill('Describe the hidden sticker'); await finder.getByLabel('Private answer 2').fill('Small silver star');
     const image = await sharp({ create: { width: 80, height: 60, channels: 3, background: '#222222' } }).png().toBuffer();
     await finder.getByLabel('Add photos').setInputFiles({ name: 'private-original.png', mimeType: 'image/png', buffer: image }); await expect(finder.getByAltText('Item photo 1')).toBeVisible();
     await finder.getByRole('button', { name: 'Publish post' }).click(); await expect(finder.getByRole('heading', { level: 1, name: 'Recovered camera pouch' })).toBeVisible(); const postUrl = finder.url(); const id = new URL(postUrl).pathname.split('/').at(-1);
     await login(claimant); await claimant.goto(postUrl); await claimant.getByRole('link', { name: 'This might be mine' }).click();
-    await claimant.getByLabel('1. What color is the lining?').fill('  NAVY   blue '); await claimant.getByLabel('2. Describe the hidden sticker').fill(' Small silver STAR '); await noAxeViolations(claimant);
-    await claimant.getByRole('button', { name: 'Submit claim for review' }).click(); await expect(claimant.getByText('Your claim was submitted for finder review.')).toBeVisible();
-    await expect(claimant.getByText('All answers matched')).toHaveCount(0);
-    await finder.goto('/notifications'); const note = finder.locator('article').filter({ hasText: 'A claim needs your review' }).first(); await note.getByRole('link', { name: 'View submission' }).click();
-    await expect(finder.getByText('All answers matched')).toBeVisible(); await noAxeViolations(finder); await finder.getByRole('button', { name: 'Approve claim', exact: true }).click(); await finder.getByRole('dialog').getByRole('button', { name: 'Approve claim', exact: true }).click();
-    await expect(finder.locator('article .status').filter({ hasText: 'Approved' })).toBeVisible(); await claimant.goto('/my-claims'); await expect(claimant.locator('article').filter({ hasText: 'Recovered camera pouch' }).getByText('Approved', { exact: true })).toBeVisible();
-    await finder.getByRole('link', { name: 'Open campus chat' }).click();
-    await claimant.locator('article').filter({ hasText: 'Recovered camera pouch' }).getByRole('link', { name: 'Open campus chat' }).click();
+    await claimant.getByRole('button', { name: 'Request a private conversation' }).click();
+    await finder.goto('/notifications');
+    await finder.locator('article').filter({ hasText: 'A conversation request needs your review' }).first().getByRole('link', { name: 'View Campus chat' }).click();
+    await finder.getByRole('button', { name: 'Accept request', exact: true }).click();
+    await finder.getByRole('dialog').getByRole('button', { name: 'Accept request', exact: true }).click();
+    await finder.getByRole('link', { name: 'Open conversation' }).first().click();
+    await claimant.goto('/chat');
+    await claimant.getByRole('link', { name: 'Open conversation' }).first().click();
     await expect(finder.getByText('Connected', { exact: true })).toBeVisible(); await expect(claimant.getByText('Connected', { exact: true })).toBeVisible();
     const literal = '<script>window.__chatxss = 1</script>';
     await finder.getByLabel('Message', { exact: true }).fill(literal); await finder.getByRole('button', { name: 'Send message', exact: true }).click();

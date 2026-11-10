@@ -1,5 +1,4 @@
 const { z } = require('zod');
-const { normalizeAnswer } = require('../lib/verificationAnswers');
 const objectId = z.string().regex(/^[a-f0-9]{24}$/);
 const categories = [
   'electronics',
@@ -31,21 +30,6 @@ const images = z
   .array(objectId)
   .max(4)
   .refine((v) => new Set(v).size === v.length);
-const questions = z
-  .array(
-    z
-      .object({
-        question: z.string().trim().min(5).max(250),
-        answer: z
-          .string()
-          .min(1)
-          .max(500)
-          .refine((v) => normalizeAnswer(v).length > 0),
-      })
-      .strict()
-  )
-  .min(2)
-  .max(3);
 const itemFields = {
   category: z.enum(categories),
   title: z.string().trim().min(1).max(120),
@@ -61,12 +45,10 @@ const createPost = z.discriminatedUnion('type', [
       type: z.literal('found'),
       ...itemFields,
       images: images.min(1),
-      verificationQuestions: questions,
     })
     .strict(),
   z.object({ type: z.literal('lost'), ...itemFields }).strict(),
 ]);
-// Verification challenges cannot be edited after publication; Phase 4 claims depend on their stability.
 const editPost = z
   .object({
     revision: z.number().int().min(0),

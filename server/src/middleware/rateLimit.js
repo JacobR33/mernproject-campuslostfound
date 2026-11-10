@@ -30,12 +30,13 @@ async function consumeRate(scope, identity, maximum, windowMs = 60000) {
     throw Object.assign(new Error('Too many requests'), { httpStatus: 429 });
   }
 }
-function rateLimit(scope, maximum = limits[scope], windowMs = 15 * 60 * 1000) {
+function rateLimit(scope, maximum = limits[scope], windowMs = 15 * 60 * 1000, { perUser = false } = {}) {
   return async (req, res, next) => {
     try {
       const window = Math.floor(Date.now() / windowMs);
       const expiresAt = new Date((window + 1) * windowMs);
-      const key = hash(`${scope}|${req.ip}|${window}`);
+      const identity = perUser && req.user ? `user:${req.user._id}` : req.ip;
+      const key = hash(`${scope}|${identity}|${window}`);
       let bucket;
       try {
         bucket = await RateBucket.findOneAndUpdate(

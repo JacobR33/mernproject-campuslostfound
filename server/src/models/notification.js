@@ -4,10 +4,17 @@ const schema = new Schema(
   {
     recipient: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     post: { type: Schema.Types.ObjectId, ref: 'Post', required: true },
-    claim: { type: Schema.Types.ObjectId, ref: 'Claim', required: true },
+    // Shared request reference keeps notification deduplication consistent for both post types.
+    claim: {
+      type: Schema.Types.ObjectId,
+      ref: function () {
+        return this.kind.startsWith('match_') ? 'MatchRequest' : 'Claim';
+      },
+      required: true,
+    },
     kind: {
       type: String,
-      enum: ['claim_submitted', 'claim_approved', 'claim_denied'],
+      enum: ['claim_submitted', 'claim_approved', 'claim_denied', 'match_submitted', 'match_accepted', 'match_denied'],
       required: true,
     },
     attemptCount: { type: Number, required: true, min: 1, max: 3 },

@@ -1,6 +1,6 @@
 import { ReportPost, AdminRemovePost } from './ModerationPages';
 import React, { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { useAction, useResource } from '../hooks';
@@ -26,9 +26,11 @@ export function PostDetail() {
   const resource = useResource(id, (signal) => api.get(`/api/posts/${id}`, { signal }));
   const post = resource.data?.post;
   const owner = post?.author.id === auth.user?.id;
+  const location = useLocation();
   return (
     <>
       <PageTitle eyebrow="THE CAMPUS BOARD">{post?.item.title || 'Post details'}</PageTitle>
+      <Notice>{location.state?.notice}</Notice>
       <ResourceState resource={resource}>
         {post && (
           <div className="detail-grid">
@@ -76,26 +78,19 @@ export function PostDetail() {
                   <Link className="button" to="/my-posts">
                     Manage my posts
                   </Link>
-                  {post.type === 'found' && (
-                    <Link className="button secondary" to={`/posts/${id}/review`}>
-                      Review claims
-                    </Link>
-                  )}
+                  <Link className="button secondary" to="/chat">
+                    Review requests
+                  </Link>
                 </div>
               ) : post.type === 'found' ? (
-                post.acceptingClaims ? (
-                  <>
-                    <Notice>
-                      Know the details only its owner would know? Answer the finder’s private
-                      verification questions.
-                    </Notice>
-                    <Link className="button wide" to={`/posts/${id}/claim`}>
-                      This might be mine
-                    </Link>
-                  </>
-                ) : (
-                  <Notice>This item is not accepting new claims.</Notice>
-                )
+                <>
+                  <Notice>Think this is yours? Ask the finder to open a private conversation.</Notice>
+                  {post.acceptingMatches ? (
+                    <Link className="button wide" to={`/posts/${id}/match`}>This might be mine</Link>
+                  ) : (
+                    <Notice>This post is not accepting new conversation requests.</Notice>
+                  )}
+                </>
               ) : post.acceptingMatches ? (
                 <>
                   <Notice>
@@ -171,7 +166,7 @@ function ImageEditor({ images, setImages, onBusy }) {
     <fieldset>
       <legend>Photos</legend>
       <p className="muted small">
-        All published photos are public. Avoid identifying marks that answer your questions, contact
+        All published photos are public. Avoid private identifying details, contact
         details, student IDs, or other personal documents.
       </p>
       <Notice error>{action.error}</Notice>
@@ -231,7 +226,7 @@ function EditLoader({ id }) {
             />
           ) : (
             <Notice>
-              Editing is paused while a claim is pending or an item has been returned.{' '}
+              Editing is paused while a conversation is active or an item has been returned.{' '}
               <Link to="/my-posts">Back to My Posts</Link>
             </Notice>
           ))}
@@ -244,10 +239,6 @@ function EditablePost({ type, initial, reload }) {
   const action = useAction();
   const [images, setImages] = useState(initial?.item.images || []);
   const [uploading, setUploading] = useState(false);
-  const [questions, setQuestions] = useState([
-    { question: '', answer: '' },
-    { question: '', answer: '' },
-  ]);
   function submit(event) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -257,13 +248,6 @@ function EditablePost({ type, initial, reload }) {
       }
       if (type === 'found' && !images.length) {
         throw new Error('Add at least one photo for a found item.');
-      }
-      if (
-        !initial &&
-        type === 'found' &&
-        questions.some((q) => q.question.trim().length < 5 || !q.answer.trim())
-      ) {
-        throw new Error('Add two or three questions with nonblank private answers.');
       }
       const body = {
         category: data.get('category'),
@@ -294,14 +278,10 @@ function EditablePost({ type, initial, reload }) {
       } else {
         response = await api.post(
           '/api/posts',
-          { ...body, type, ...(type === 'found' ? { verificationQuestions: questions } : {}) },
+          { ...body, type },
           { auth: true, signal }
         );
       }
-      setQuestions([
-        { question: '', answer: '' },
-        { question: '', answer: '' },
-      ]);
       navigate(`/posts/${response.post.id}`, { replace: true });
     });
   }
@@ -320,18 +300,20 @@ function EditablePost({ type, initial, reload }) {
           {type === 'found' ? 'Post a found item.' : 'Post a lost item.'}
         </PageTitle>
       )}
-      <form className="surface editor" onSubmit={submit}>
-        <Notice error>
-          {action.error}
-          {action.error.includes('Reload') && reload && (
-            <>
-              {' '}
-              <button type="button" className="text-button" onClick={reload}>
-                Reload saved post
-              </button>
-            </>
-          )}
-        </Notice>
+      <form className={`surface editor${type === 'found' ? ' found-post-form' : ''}`} onSubmit={submit}>
+        {action.error && (
+          <Notice error>
+            {action.error}
+            {action.error.includes('Reload') && reload && (
+              <>
+                {' '}
+                <button type="button" className="text-button" onClick={reload}>
+                  Reload saved post
+                </button>
+              </>
+            )}
+          </Notice>
+        )}
         <fieldset disabled={action.pending}>
           <legend>About the item</legend>
           <div className="form-grid">
@@ -358,7 +340,7 @@ function EditablePost({ type, initial, reload }) {
           </div>
           <Field
             label="Public description"
-            hint="Keep it vague. Do not include contact details or the answers to verification questions."
+            hint="Keep it vague. Discuss identifying details privately after accepting a conversation request."
           >
             <textarea
               name="publicDescription"
@@ -411,85 +393,6 @@ function EditablePost({ type, initial, reload }) {
           </div>
         </fieldset>
         <ImageEditor images={images} setImages={setImages} onBusy={setUploading} />
-        {type === 'found' && (
-          <fieldset disabled={action.pending}>
-            <legend>Private ownership verification</legend>
-            {initial ? (
-              <>
-                <p className="small muted">
-                  Your original questions stay the same. Their private answers are never displayed.
-                </p>
-                <ol>
-                  {initial.verificationQuestions.map((q) => (
-                    <li key={q.id}>{q.question}</li>
-                  ))}
-                </ol>
-              </>
-            ) : (
-              <>
-                <Notice>
-                  Ask about details only the owner should know. Questions are public; answers are
-                  private. Do not reveal those answers in your description or photos.
-                </Notice>
-                {questions.map((question, index) => (
-                  <div className="question-box" key={index}>
-                    <h3>Question {index + 1}</h3>
-                    <Field
-                      label={`Verification question ${index + 1}`}
-                      required
-                      minLength={5}
-                      maxLength={250}
-                      value={question.question}
-                      onChange={(event) =>
-                        setQuestions((values) =>
-                          values.map((q, i) =>
-                            i === index ? { ...q, question: event.target.value } : q
-                          )
-                        )
-                      }
-                      placeholder="For example, describe a hidden marking"
-                    />
-                    <Field
-                      label={`Private answer ${index + 1}`}
-                      type="password"
-                      autoComplete="off"
-                      required
-                      maxLength={500}
-                      value={question.answer}
-                      onChange={(event) =>
-                        setQuestions((values) =>
-                          values.map((q, i) =>
-                            i === index ? { ...q, answer: event.target.value } : q
-                          )
-                        )
-                      }
-                    />
-                    {index === 2 && (
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => setQuestions((values) => values.slice(0, 2))}
-                      >
-                        Remove third question
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {questions.length < 3 && (
-                  <button
-                    type="button"
-                    className="button secondary"
-                    onClick={() =>
-                      setQuestions((value) => [...value, { question: '', answer: '' }])
-                    }
-                  >
-                    Add a third question
-                  </button>
-                )}
-              </>
-            )}
-          </fieldset>
-        )}
         {initial && (
           <Field label="Post status">
             <select name="status" defaultValue={initial.status}>
@@ -571,23 +474,15 @@ export function MyPosts() {
                   </p>
                 </div>
                 <div className="actions">
-                  {post.type === 'found' && (
-                    <Link className="button secondary" to={`/posts/${post.id}/review`}>
-                      Review claims
-                    </Link>
-                  )}
-                  {post.type === 'lost' && (
-                    <Link className="button secondary" to="/chat">
-                      Review requests
-                    </Link>
-                  )}
+                  <Link className="button secondary" to="/chat">
+                    Review requests
+                  </Link>
                   {['open', 'closed'].includes(post.status) && (
                     <Link className="button secondary" to={`/posts/${post.id}/edit`}>
                       Edit
                     </Link>
                   )}
-                  {post.status === 'claim_pending' &&
-                    (post.type === 'found' ? !post.acceptingClaims : !post.acceptingMatches) && (
+                  {post.status === 'claim_pending' && (
                       <button
                         className="button secondary"
                         onClick={() => {
@@ -636,7 +531,7 @@ export function MyPosts() {
         >
           {confirm.returning
             ? 'Only confirm once the item is back with its owner.'
-            : 'The post and its photos will become unavailable. Related claims and conversations will be removed.'}
+            : 'The post and its photos will become unavailable. Related requests and conversations will be removed.'}
         </Confirm>
       )}
     </>

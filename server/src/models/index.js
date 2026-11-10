@@ -166,7 +166,7 @@ const postSchema = new Schema(
       default: [],
       validate: {
         validator: function (v) {
-          return this.type === 'found' ? v.length >= 2 && v.length <= 3 : v.length === 0;
+          return v.length === 0 || (this.type === 'found' && v.length >= 2 && v.length <= 3);
         },
         message: 'Invalid verification question count',
       },
@@ -219,6 +219,7 @@ const conversationSchema = new Schema(
     post: ref('Post'),
     claim: { type: Schema.Types.ObjectId, ref: 'Claim' },
     matchRequest: { type: Schema.Types.ObjectId, ref: 'MatchRequest' },
+    closedAt: { type: Date, default: null },
     messageSequence: { type: Number, default: 0, min: 0 },
     updatedAt: { type: Date, default: Date.now },
     participants: {

@@ -4,6 +4,26 @@ const response = (status, data = null) => ({ status, ok: status < 400, json: asy
 const json = (status, data) => Promise.resolve(response(status, data));
 const lock = { request: jest.fn((name, work) => work()) };
 
+test.each([
+  [{}, 'Too many requests. Try again in 30 seconds.'],
+  [{ code: 'CLAIM_ATTEMPT_LIMIT' }, 'The three-attempt limit for this claim was reached.'],
+])('rate limit messages distinguish temporary throttling from claim attempts: %j', async (body, message) => {
+  const fetchImpl = jest.fn(async path => {
+    if (path.endsWith('/csrf')) return response(200, { csrfToken });
+    return { ...response(429, body), headers: { get: () => '30' } };
+  });
+  await expect(createApiClient({ fetchImpl }).post('/api/posts', {})).rejects.toMatchObject({ status: 429, retryAfter: 30, message });
+});
+
+test.each([
+  [{ code: 'REQUEST_DENIED' }, 'Request was denied.'],
+  [{}, 'This record changed. Reload it before trying again.'],
+])('conversation request conflicts display the specific reason when available: %j', async (body, message) => {
+  const fetchImpl = jest.fn(path => path.endsWith('/csrf') ? json(200, { csrfToken }) : json(409, body));
+  const api = createApiClient({ fetchImpl });
+  await expect(api.post(`/api/posts/${'a'.repeat(24)}/matches`, {})).rejects.toMatchObject({ status: 409, message });
+});
+
 test('admin deletion never retries a password failure or signs the administrator out', async () => {
   const target = 'a'.repeat(24);
   let allowed = false;

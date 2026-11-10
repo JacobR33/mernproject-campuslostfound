@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { mergeMessages, openConversation } from '../api/chat';
 import { useAuth } from '../auth';
@@ -28,12 +28,12 @@ export function MatchPage() {
         {post && (
           <section className="surface editor">
             <h2>{post.item.title}</h2>
-            {post.type !== 'lost' || !post.acceptingMatches || post.author.id === auth.user.id ? (
+            {!post.acceptingMatches || post.author.id === auth.user.id ? (
               <Notice>This post is not accepting a conversation request from you.</Notice>
             ) : (
               <>
                 <p>
-                  Ask the person who lost this item to open a private campus conversation. No
+                  Ask the post owner to open a private campus conversation. No
                   messages can be sent until they accept.
                 </p>
                 <Notice>
@@ -47,7 +47,7 @@ export function MatchPage() {
                   onClick={() =>
                     action.run(async (signal) => {
                       await api.post(`/api/posts/${id}/matches`, {}, { auth: true, signal });
-                      navigate('/chat', { replace: true });
+                      navigate('/chat?direction=mine', { replace: true });
                     })
                   }
                 >
@@ -70,9 +70,10 @@ export function ChatPage() {
   );
 }
 function ChatInbox() {
+  const [searchParams] = useSearchParams();
   const [page, setPage] = useState(1);
   const [requestPage, setRequestPage] = useState(1);
-  const [direction, setDirection] = useState('incoming');
+  const [direction, setDirection] = useState(() => searchParams.get('direction') === 'mine' ? 'mine' : 'incoming');
   const [confirm, setConfirm] = useState(null);
   const action = useAction();
   const resource = useResource(page, (signal) =>
@@ -96,6 +97,13 @@ function ChatInbox() {
   }, []);
   function decide() {
     action.run(async (signal) => {
+      if (confirm.closing) {
+        await api.post(`/api/conversations/${confirm.id}/close`, {}, { auth: true, signal });
+        setConfirm(null);
+        requests.reload();
+        resource.reload();
+        return;
+      }
       await api.post(
         `/api/posts/${confirm.post.id}/matches/${confirm.id}/decision`,
         { decision: confirm.decision },
@@ -110,7 +118,7 @@ function ChatInbox() {
     <>
       <PageTitle
         eyebrow="KEEP THE CONVERSATION ON CAMPUS"
-        description="Private conversations open only after an approved claim or accepted request."
+        description="Private conversations open after the post owner accepts your request."
       >
         Campus chat
       </PageTitle>
@@ -135,20 +143,31 @@ function ChatInbox() {
                     {conversation.participants.map((person) => person.displayName).join(' · ')}
                   </p>
                 </div>
-                <Link className="button" to={`/chat/${conversation.id}`}>
-                  Open conversation
-                </Link>
+                <div className="actions">
+                  <Link className="button" to={`/chat/${conversation.id}`}>
+                    Open conversation
+                  </Link>
+                  <button
+                    className="button danger"
+                    onClick={() => {
+                      action.setError('');
+                      setConfirm({ ...conversation, closing: true });
+                    }}
+                  >
+                    Close conversation
+                  </button>
+                </div>
               </article>
             ))}
           </div>
         ) : (
           <Empty title="A private place to reconnect.">
-            Approved claims and accepted requests will appear here.
+            Accepted requests will appear here.
           </Empty>
         )}
         <Pagination value={resource.data?.pagination} onPage={setPage} />
       </ResourceState>
-      <h2 className="inbox-heading">Lost-item conversation requests</h2>
+      <h2 className="inbox-heading">Conversation requests</h2>
       <div className="toolbar">
         <Field label="Request direction">
           <select
@@ -158,7 +177,7 @@ function ChatInbox() {
               setRequestPage(1);
             }}
           >
-            <option value="incoming">Requests on my lost posts</option>
+            <option value="incoming">Requests on my posts</option>
             <option value="mine">Requests I sent</option>
           </select>
         </Field>
@@ -183,7 +202,7 @@ function ChatInbox() {
                     </Link>
                   ) : direction === 'incoming' &&
                     request.status === 'pending' &&
-                    request.post.status === 'open' ? (
+                    ['open', 'claim_pending'].includes(request.post.status) ? (
                     <>
                       <button
                         className="button"
@@ -217,7 +236,7 @@ function ChatInbox() {
           </div>
         ) : (
           <Empty title="No requests here yet.">
-            If you think you found a lost item, request a conversation from its post.
+            Request a conversation from a lost or found item?s post.
           </Empty>
         )}
         <Pagination value={requests.data?.pagination} onPage={setRequestPage} />
@@ -225,19 +244,29 @@ function ChatInbox() {
       {confirm && (
         <Confirm
           title={
-            confirm.decision === 'accept'
-              ? 'Accept this conversation request?'
-              : 'Deny this request?'
+            confirm.closing
+              ? 'Close this conversation?'
+              : confirm.decision === 'accept'
+                ? 'Accept this conversation request?'
+                : 'Deny this request?'
           }
-          label={confirm.decision === 'accept' ? 'Accept request' : 'Deny request'}
+          label={
+            confirm.closing
+              ? 'Close conversation'
+              : confirm.decision === 'accept'
+                ? 'Accept request'
+                : 'Deny request'
+          }
           pending={action.pending}
           error={action.error}
           onConfirm={decide}
           onCancel={() => setConfirm(null)}
         >
-          {confirm.decision === 'accept'
-            ? 'This opens a private conversation with this finder and resolves other pending requests for this post.'
-            : 'The requester will see that the request was denied.'}
+          {confirm.closing
+            ? 'This ends the conversation for both people and removes it from your inboxes. Neither person can send more messages in this conversation.'
+            : confirm.decision === 'accept'
+              ? 'This opens a private conversation with this requester. You can also accept other requests and keep separate conversations open.'
+              : 'The requester will see that the request was denied.'}
         </Confirm>
       )}
     </>

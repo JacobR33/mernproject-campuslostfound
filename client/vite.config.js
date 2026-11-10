@@ -35,6 +35,8 @@ export default defineConfig(({ mode }) => {
       host: '127.0.0.1',
       port: 5173,
       strictPort: true,
+      // Poll so edits are detected even when filesystem change events are missed.
+      watch: { usePolling: true, interval: 250 },
       proxy,
       fs: {
         allow: [process.cwd(), path.resolve(process.cwd(), '../node_modules')],

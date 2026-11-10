@@ -703,6 +703,10 @@ legend {
   padding-top: 1rem;
   border-top: 1px solid var(--line);
 }
+.found-post-form > fieldset:last-of-type,
+.found-post-form > .form-actions {
+  border: 0;
+}
 .notice {
   padding: 1rem 1.1rem;
   margin-bottom: 1.3rem;
@@ -927,6 +931,9 @@ legend {
 .toolbar .field {
   margin-bottom: 0;
   min-width: 180px;
+}
+.claims-toolbar {
+  align-items: flex-end;
 }
 .review-card {
   padding: 1.6rem;

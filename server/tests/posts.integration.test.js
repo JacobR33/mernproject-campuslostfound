@@ -40,7 +40,7 @@ async function upload(b, buffer = png, type = 'image/png', filename = 'private-o
 }
 async function imageId(b) { const response = await upload(b); expect(response.status).toBe(201); return response.body.image.id; }
 const lostBody = (overrides = {}) => ({ type: 'lost', category: 'electronics', title: 'Campus headphones', publicDescription: 'Headphones lost on campus', privateDetails: 'quartzprivatezebra', location: { campusArea: 'Main', buildingName: 'Library' }, dateFoundOrLost: '2026-10-01T12:00:00.000Z', ...overrides });
-async function foundBody(b, overrides = {}) { return lostBody({ type: 'found', images: [await imageId(b)], verificationQuestions: prompts, ...overrides }); }
+async function foundBody(b, overrides = {}) { return lostBody({ type: 'found', images: [await imageId(b)], ...overrides }); }
 async function create(b, value = lostBody()) { const res = await mutate(b, 'post', '/api/posts', value); expect(res.status).toBe(201); return res.body.post; }
 async function seed(b, values = {}) {
   const item = await Item.create({ category: values.category || 'electronics', title: values.title || 'Campus headphones', publicDescription: values.publicDescription || 'Headphones lost on campus', privateDetails: 'quartzprivatezebra', images: [], ...(values.type === 'found' ? { locationFound: { campusArea: 'Main', buildingName: 'Library' } } : { lastSeen: { campusArea: 'Main', buildingName: 'Library' } }), dateFoundOrLost: values.dateFoundOrLost || new Date('2026-10-01T12:00:00Z') });
@@ -88,18 +88,16 @@ test('lost creation and public/owner DTOs never disclose emails or private detai
   expect((await authenticated(b, 'get', '/api/posts/mine')).body.posts).toEqual([]);
 });
 
-test('found posts attach owned images and store normalized salted hashes that never appear in DTOs', async () => {
+test('found posts attach owned images without requiring or exposing verification questions', async () => {
   const b = await browser(); const post = await create(b, await foundBody(b));
-  expect(post.verificationQuestions).toHaveLength(2);
-  expect(post.verificationQuestions[0]).toEqual({ id: expect.stringMatching(/^[a-f0-9]{24}$/), question: prompts[0].question });
-  const stored = await Post.findById(post.id).select('+verificationQuestions.answerHash +verificationQuestions.answerSalt').lean();
-  expect(stored.verificationQuestions[0].answerSalt).not.toBe(stored.verificationQuestions[1].answerSalt);
-  for (const q of stored.verificationQuestions) expect(q.answerHash).toBe(scryptSync('navy blue', q.answerSalt, 32).toString('hex'));
+  expect(post.verificationQuestions).toBeUndefined();
+  expect(post.acceptingMatches).toBe(true);
+  const stored = await Post.findById(post.id).lean();
+  expect(stored.verificationQuestions).toEqual([]);
   for (const path of ['/api/posts', `/api/posts/${post.id}`, `/api/posts/${post.id}/manage`, '/api/posts/mine']) {
     const res = await authenticated(b, 'get', path);
     expect(res.status).toBe(200);
-    for (const q of stored.verificationQuestions) { expect(res.text).not.toContain(q.answerHash); expect(res.text).not.toContain(q.answerSalt); }
-    expect(res.text).not.toMatch(/Navy|BLUE|answerHash|answerSalt/);
+    expect(res.text).not.toMatch(/verificationQuestions|answerHash|answerSalt/);
   }
   const attached = await Upload.findById(post.item.images[0].id);
   expect(attached.state).toBe('attached'); expect(String(attached.post)).toBe(post.id);
@@ -118,10 +116,10 @@ test.each([
   expect(await Post.countDocuments()).toBe(0); expect(await Item.countDocuments()).toBe(0);
 });
 
-test('found image and question bounds are enforced before persistence', async () => {
+test('found posts require photos and reject retired verification inputs', async () => {
   const b = await browser();
   for (const change of [ { images: [] }, { verificationQuestions: [] }, { verificationQuestions: prompts.slice(0, 1) }, { verificationQuestions: [...prompts, ...prompts] }, { verificationQuestions: [{ question: 'A question?', answer: '   ' }, prompts[1]] } ]) {
-    const value = lostBody({ type: 'found', images: ['a'.repeat(24)], verificationQuestions: prompts, ...change });
+    const value = lostBody({ type: 'found', images: ['a'.repeat(24)], ...change });
     expect((await mutate(b, 'post', '/api/posts', value)).status).toBe(400);
   }
   expect(await Post.countDocuments()).toBe(0);

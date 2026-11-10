@@ -66,3 +66,11 @@ test('wrong credentials show a generic failure on Login without opening the boar
   expect(screen.queryByText('Private server detail')).not.toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'Campus board' })).not.toBeInTheDocument();
 });
+
+test('legacy My Claims links redirect to Notifications and navigation omits the removed page', async () => {
+  api.session.mockResolvedValue({ id: 'demo-user', role: 'user' });
+  api.get.mockResolvedValue({ pagination: { total: 0 }, notifications: [] });
+  render(<MemoryRouter initialEntries={['/my-claims']}><App /></MemoryRouter>);
+  expect(await screen.findByRole('heading', { name: 'Notifications' })).toBeVisible();
+  expect(screen.queryByRole('link', { name: 'My Claims' })).not.toBeInTheDocument();
+});

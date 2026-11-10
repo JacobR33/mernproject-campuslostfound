@@ -2,7 +2,6 @@ const { lockActor } = require('../lib/lockActor');
 const mongoose = require('mongoose');
 const { Post, Item } = require('../models');
 const Upload = require('../models/upload');
-const { hashQuestions } = require('../lib/verificationAnswers');
 const { httpError } = require('../lib/httpError');
 const { withTransaction } = require('../lib/transaction');
 const { trusted } = mongoose;
@@ -54,22 +53,12 @@ function postDTO(post, item, author, owner = false) {
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
     expiresAt: post.expiresAt,
-    acceptingClaims:
-      typeof post.acceptingClaims === 'boolean'
-        ? post.acceptingClaims
-        : post.type === 'found' &&
-          ['open', 'claim_pending'].includes(post.status) &&
-          !post.approvedClaim,
     acceptingMatches:
       typeof post.acceptingMatches === 'boolean'
         ? post.acceptingMatches
-        : post.type === 'lost' && post.status === 'open' && !post.approvedMatch,
+        : ['open', 'claim_pending'].includes(post.status),
     author: { id: String(author._id), displayName: author.displayName },
     item: itemDTO,
-    verificationQuestions: post.verificationQuestions.map((q) => ({
-      id: String(q.id || q._id),
-      question: q.question,
-    })),
   };
 }
 async function attachImages(ids, post, owner, session) {
@@ -97,13 +86,6 @@ async function attachImages(ids, post, owner, session) {
   );
 }
 
-const questionProjection = {
-  $map: {
-    input: '$verificationQuestions',
-    as: 'q',
-    in: { id: { $toString: '$$q._id' }, question: '$$q.question' },
-  },
-};
 const postProjection = {
   _id: 1,
   type: 1,
@@ -113,19 +95,9 @@ const postProjection = {
   updatedAt: 1,
   expiresAt: 1,
   revision: 1,
-  verificationQuestions: questionProjection,
-  acceptingClaims: {
-    $and: [
-      { $eq: ['$type', 'found'] },
-      { $in: ['$status', ['open', 'claim_pending']] },
-      { $eq: [{ $ifNull: ['$approvedClaim', null] }, null] },
-    ],
-  },
   acceptingMatches: {
     $and: [
-      { $eq: ['$type', 'lost'] },
-      { $eq: ['$status', 'open'] },
-      { $eq: [{ $ifNull: ['$approvedMatch', null] }, null] },
+      { $in: ['$status', ['open', 'claim_pending']] },
     ],
   },
 };
@@ -159,8 +131,6 @@ function createPostController(config, logger) {
   return {
     async create(req, res) {
       const value = req.validated.body;
-      const questions =
-        value.type === 'found' ? await hashQuestions(value.verificationQuestions) : [];
       let result;
       await withTransaction(async (session) => {
         await lockActor(session, req.user, req.auth.version);
@@ -171,7 +141,7 @@ function createPostController(config, logger) {
               type: value.type,
               item: item._id,
               author: req.user._id,
-              verificationQuestions: questions,
+              verificationQuestions: [],
               expiresAt: new Date(Date.now() + config.POST_RETENTION_DAYS * 86400000),
             },
           ],

@@ -20,9 +20,10 @@ test('sensitive data excluded from serialization and default projections', () =>
   expect(JSON.stringify(new Claim({ submittedAnswers: ['private', 'answer'] }))).not.toContain('submittedAnswers');
   for (const [Model, path] of [[User, 'passwordHash'], [User, 'email'], [Item, 'privateDetails'], [Claim, 'submittedAnswers']]) expect(Model.schema.path(path).options.select).toBe(false);
 });
-test('found posts require two or three questions; lost posts forbid them', () => {
+test('new posts need no questions and legacy found challenges remain valid', () => {
   const base = { item: id(), author: id(), expiresAt: new Date() };
-  for (const count of [0, 1, 4]) expect(new Post({ ...base, type: 'found', verificationQuestions: Array.from({ length: count }, question) }).validateSync()).toBeDefined();
+  for (const count of [1, 4]) expect(new Post({ ...base, type: 'found', verificationQuestions: Array.from({ length: count }, question) }).validateSync()).toBeDefined();
+  expect(new Post({ ...base, type: 'found' }).validateSync()).toBeUndefined();
   expect(new Post({ ...base, type: 'found', verificationQuestions: [question(), question()] }).validateSync()).toBeUndefined();
   expect(new Post({ ...base, type: 'lost', verificationQuestions: [question()] }).validateSync()).toBeDefined();
 });

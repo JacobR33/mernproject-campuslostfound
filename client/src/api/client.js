@@ -96,14 +96,19 @@ export function createApiClient({
         409: 'This record changed. Reload it before trying again.',
         413: 'Choose an image smaller than 5 MiB.',
         415: 'This file or request format is not supported.',
-        429: 'Too many requests or the three-attempt limit was reached.',
+        429: 'Too many requests. Please wait and try again.',
         503: 'The service is busy. Please try again shortly.',
       };
-      const error = new ApiError(
-        response.status,
-        messages[response.status] || 'Something went wrong. Please try again.',
-        Number(response.headers?.get('Retry-After')) || 0
-      );
+      const retryAfter = Number(response.headers?.get('Retry-After')) || 0;
+      let message = messages[response.status] || 'Something went wrong. Please try again.';
+      if (response.status === 409 && data?.code === 'REQUEST_DENIED') {
+        message = 'Request was denied.';
+      } else if (response.status === 429 && data?.code === 'CLAIM_ATTEMPT_LIMIT') {
+        message = 'The three-attempt limit for this claim was reached.';
+      } else if (response.status === 429 && retryAfter > 0) {
+        message = `Too many requests. Try again in ${Math.ceil(retryAfter)} seconds.`;
+      }
+      const error = new ApiError(response.status, message, retryAfter);
       error.csrfRejected = response.status === 403 && data?.error === 'Request rejected';
       throw error;
     }

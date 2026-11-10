@@ -9,6 +9,7 @@ const { createApp } = require('../src/app');
 const { attachChat } = require('../src/realtime/chat');
 const { User, Item, Post, Claim, Conversation, Message } = require('../src/models');
 const MatchRequest = require('../src/models/matchRequest');
+const Notification = require('../src/models/notification');
 const { AuthSession, RateBucket } = require('../src/models/auth');
 const { hashQuestions } = require('../src/lib/verificationAnswers');
 const { hashPassword, mintCsrf, hash, token } = require('../src/lib/authCrypto');
@@ -53,12 +54,12 @@ const get = (actor, path) => request(app).get(path).set(actor.headers);
 const mutate = (actor, path, body = {}) => request(app).post(path).set(actor.headers).set('X-CSRF-Token', actor.csrf).send(body);
 beforeAll(async () => {
   mongo = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } }); mongoose.set('sanitizeFilter', true); mongoose.set('strictQuery', true); await mongoose.connect(mongo.getUri());
-  await Promise.all([User, Item, Post, Claim, Conversation, Message, MatchRequest, AuthSession, RateBucket].map(model => model.init()));
+  await Promise.all([User, Item, Post, Claim, Conversation, Message, MatchRequest, Notification, AuthSession, RateBucket].map(model => model.init()));
   passwordHash = await hashPassword('Campus chat fixture passphrase 47!'); questions = await hashQuestions([{ question: 'First question?', answer: 'canonical answer' }, { question: 'Second question?', answer: 'another answer' }]);
   logger = jest.fn(); app = createApp(config, { logger, mailer: { send: async () => {} } }); server = createServer(app); chat = attachChat(server, config, logger);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); url = `http://127.0.0.1:${server.address().port}`;
 });
-beforeEach(async () => { chat.io.disconnectSockets(true); clients.splice(0).forEach(client => client.disconnect()); for (const model of [Message, Conversation, MatchRequest, Claim, Post, Item, AuthSession, RateBucket, User]) await model.deleteMany({}); logger.mockClear(); });
+beforeEach(async () => { chat.io.disconnectSockets(true); clients.splice(0).forEach(client => client.disconnect()); for (const model of [Notification, Message, Conversation, MatchRequest, Claim, Post, Item, AuthSession, RateBucket, User]) await model.deleteMany({}); logger.mockClear(); });
 afterAll(async () => { clients.forEach(client => client.disconnect()); if (chat) await chat.close(); await mongoose.disconnect(); if (mongo) await mongo.stop(); });
 
 test('cookie-authenticated participants join and receive persisted messages with explicit safe DTOs', async () => {
@@ -154,8 +155,8 @@ test('connection reservations reject more than five concurrent sockets for the s
   const actor = await identity(); const results = await Promise.allSettled(Array.from({ length: 8 }, () => connect(actor)));
   expect(results.filter(row => row.status === 'fulfilled')).toHaveLength(5); expect(results.filter(row => row.status === 'rejected')).toHaveLength(3);
 });
-test('lost matching requires author consent, enforces ownership, and creates only a linked participant conversation', async () => {
-  const owner = await identity(), finder = await identity(), stranger = await identity(), p = await post(owner, 'lost');
+test.each(['lost', 'found'])('%s requests require author consent, enforce ownership, and create only a linked participant conversation', async (type) => {
+  const owner = await identity(), finder = await identity(), stranger = await identity(), p = await post(owner, type);
   const response = await mutate(finder, `/api/posts/${p._id}/matches`); expect(response.status).toBe(201); expect(await Conversation.countDocuments()).toBe(0);
   const match = response.body.request;
   expect((await mutate(owner, `/api/posts/${p._id}/matches`)).status).toBe(404);
@@ -169,19 +170,29 @@ test('lost matching requires author consent, enforces ownership, and creates onl
   const current = await Post.findById(p._id); expect((await mutate(owner, `/api/posts/${p._id}/return`, { revision: current.revision })).status).toBe(204);
   expect((await Post.findById(p._id)).status).toBe('returned');
 });
-test('concurrent lost request acceptances select one winner and deny competitors', async () => {
+test('concurrent lost request acceptances keep separate private conversations', async () => {
   const owner = await identity(), a = await identity(), b = await identity(), p = await post(owner, 'lost');
   const first = (await mutate(a, `/api/posts/${p._id}/matches`)).body.request, second = (await mutate(b, `/api/posts/${p._id}/matches`)).body.request;
   const results = await Promise.all([mutate(owner, `/api/posts/${p._id}/matches/${first.id}/decision`, { decision: 'accept' }), mutate(owner, `/api/posts/${p._id}/matches/${second.id}/decision`, { decision: 'accept' })]);
-  expect(results.filter(row => row.status === 200)).toHaveLength(1); expect(await Conversation.countDocuments()).toBe(1); expect(await MatchRequest.countDocuments({ status: 'accepted' })).toBe(1); expect(await MatchRequest.countDocuments({ status: 'denied' })).toBe(1);
+  expect(results.filter(row => row.status === 200)).toHaveLength(2); expect(await Conversation.countDocuments()).toBe(2); expect(await MatchRequest.countDocuments({ status: 'accepted' })).toBe(2); expect(await MatchRequest.countDocuments({ status: 'denied' })).toBe(0);
+  for (const person of [a, b]) {
+    const chats = await get(person, '/api/conversations');
+    expect(chats.status).toBe(200);
+    expect(chats.body.conversations).toHaveLength(1);
+  }
+  const newcomer = await identity();
+  expect((await mutate(newcomer, `/api/posts/${p._id}/matches`)).status).toBe(201);
 });
 test('lost matching rejects denied retries, wrong post types, mass assignment and missing CSRF', async () => {
   const owner = await identity(), finder = await identity(), p = await post(owner, 'lost'), foundPost = await post(owner);
-  expect((await mutate(finder, `/api/posts/${foundPost._id}/matches`)).status).toBe(404);
+  expect((await mutate(finder, `/api/posts/${foundPost._id}/matches`)).status).toBe(201);
   expect((await mutate(finder, `/api/posts/${p._id}/matches`, { requester: String(owner.user._id) })).status).toBe(400);
   const match = (await mutate(finder, `/api/posts/${p._id}/matches`)).body.request;
   expect((await mutate(owner, `/api/posts/${p._id}/matches/${match.id}/decision`, { decision: 'deny' })).status).toBe(200);
-  expect((await mutate(finder, `/api/posts/${p._id}/matches`)).status).toBe(409); expect(await Conversation.countDocuments()).toBe(0);
+  const retry = await mutate(finder, `/api/posts/${p._id}/matches`);
+  expect(retry.status).toBe(409);
+  expect(retry.body.code).toBe('REQUEST_DENIED');
+  expect(await Conversation.countDocuments()).toBe(0);
   expect((await request(app).post(`/api/posts/${p._id}/matches`).set(finder.headers).send({})).status).toBe(403);
 });
 test('failed message insert rolls back sequence and logs no bodies, cookies, emails or proof material', async () => {
@@ -239,4 +250,192 @@ test('sender and receiver membership are rechecked after a conversation changes'
   const a = await identity(), b = await identity(), stranger = await identity(); const { conversation } = await approved(a, b); const socket = await connect(b); await join(socket, conversation);
   await Conversation.updateOne({ _id: conversation._id }, { $set: { participants: [a.user._id, stranger.user._id] } });
   expect((await send(socket, conversation)).status).toBe(404); expect((await get(b, `/api/conversations/${conversation._id}/messages`)).status).toBe(404);
+});
+
+
+test('lost-post requests notify the author once and acceptance notifies only the requester', async () => {
+  const owner = await identity(), finder = await identity(), stranger = await identity();
+  const p = await post(owner, 'lost');
+  const response = await mutate(finder, `/api/posts/${p._id}/matches`);
+  expect(response.status).toBe(201);
+  const match = response.body.request;
+  expect((await mutate(finder, `/api/posts/${p._id}/matches`)).status).toBe(200);
+  const incoming = await get(owner, '/api/notifications?unread=true');
+  expect(incoming.status).toBe(200);
+  expect(incoming.body.notifications).toHaveLength(1);
+  expect(incoming.body.notifications[0]).toMatchObject({ kind: 'match_submitted', matchRequestId: match.id, claimId: null });
+  expect((await get(finder, '/api/notifications')).body.notifications).toEqual([]);
+  expect((await get(stranger, '/api/notifications')).body.notifications).toEqual([]);
+  const accepted = await mutate(owner, `/api/posts/${p._id}/matches/${match.id}/decision`, { decision: 'accept' });
+  expect(accepted.status).toBe(200);
+  expect((await mutate(owner, `/api/posts/${p._id}/matches/${match.id}/decision`, { decision: 'accept' })).status).toBe(409);
+  const notes = await get(finder, '/api/notifications?unread=true');
+  expect(notes.body.notifications).toHaveLength(1);
+  expect(notes.body.notifications[0]).toMatchObject({ kind: 'match_accepted', matchRequestId: match.id });
+  expect(await Notification.countDocuments()).toBe(2);
+  const note = notes.body.notifications[0];
+  expect((await request(app).patch(`/api/notifications/${note.id}/read`).set(finder.headers).set('X-CSRF-Token', finder.csrf).send({})).status).toBe(204);
+  expect((await get(finder, '/api/notifications?unread=true')).body.notifications).toEqual([]);
+});
+
+test('notification failure rolls back lost-post requests and acceptances', async () => {
+  const owner = await identity(), finder = await identity(), p = await post(owner, 'lost');
+  let failure = jest.spyOn(Notification, 'create').mockRejectedValueOnce(new Error('notification unavailable'));
+  try { expect((await mutate(finder, `/api/posts/${p._id}/matches`)).status).toBe(500); }
+  finally { failure.mockRestore(); }
+  expect(await MatchRequest.countDocuments()).toBe(0);
+  const match = (await mutate(finder, `/api/posts/${p._id}/matches`)).body.request;
+  failure = jest.spyOn(Notification, 'create').mockRejectedValueOnce(new Error('notification unavailable'));
+  try { expect((await mutate(owner, `/api/posts/${p._id}/matches/${match.id}/decision`, { decision: 'accept' })).status).toBe(500); }
+  finally { failure.mockRestore(); }
+  expect((await MatchRequest.findById(match.id)).status).toBe('pending');
+  expect(await Conversation.countDocuments()).toBe(0);
+  expect(await Notification.countDocuments({ kind: 'match_accepted' })).toBe(0);
+});
+
+
+test.each(['author', 'requester'])('either participant can close a conversation (%s), without closing other chats', async (closer) => {
+  const owner = await identity(), finder = await identity(), other = await identity();
+  const first = await approved(owner, finder), second = await approved(owner, other);
+  const socket = await connect(finder);
+  expect((await join(socket, first.conversation)).ok).toBe(true);
+  const actor = closer === 'author' ? owner : finder;
+  expect((await mutate(actor, `/api/conversations/${first.conversation._id}/close`)).status).toBe(204);
+  expect((await Conversation.findById(first.conversation._id)).closedAt).toBeInstanceOf(Date);
+  expect((await send(socket, first.conversation)).status).toBe(404);
+  for (const person of [owner, finder]) {
+    expect((await get(person, `/api/conversations/${first.conversation._id}`)).status).toBe(404);
+    expect((await get(person, `/api/conversations/${first.conversation._id}/messages`)).status).toBe(404);
+    const inbox = await get(person, '/api/conversations');
+    expect(inbox.body.conversations.map(row => row.id)).not.toContain(String(first.conversation._id));
+  }
+  expect((await get(owner, `/api/conversations/${second.conversation._id}`)).status).toBe(200);
+  expect((await Post.findById(first.post._id)).status).toBe('claim_pending');
+});
+
+test('nonparticipants cannot close a conversation, including admins, and closure requires CSRF', async () => {
+  const owner = await identity(), finder = await identity(), stranger = await identity(), admin = await identity({ role: 'admin' });
+  const { conversation } = await approved(owner, finder);
+  for (const actor of [stranger, admin]) {
+    expect((await mutate(actor, `/api/conversations/${conversation._id}/close`)).status).toBe(404);
+  }
+  expect((await request(app).post(`/api/conversations/${conversation._id}/close`).set(owner.headers).send({})).status).toBe(403);
+  expect((await Conversation.findById(conversation._id)).closedAt).toBeNull();
+});
+
+test('accepted requests leave both request lists and stay absent after the conversation closes', async () => {
+  const owner = await identity(), finder = await identity(), other = await identity(), p = await post(owner, 'lost');
+  const first = (await mutate(finder, `/api/posts/${p._id}/matches`)).body.request;
+  const pending = (await mutate(other, `/api/posts/${p._id}/matches`)).body.request;
+  const accepted = await mutate(owner, `/api/posts/${p._id}/matches/${first.id}/decision`, { decision: 'accept' });
+  expect(accepted.status).toBe(200);
+  const check = async () => {
+    const incoming = await get(owner, '/api/matches/incoming?limit=1');
+    expect(incoming.body.requests.map(row => row.id)).toEqual([pending.id]);
+    expect(incoming.body.pagination.total).toBe(1);
+    expect((await get(finder, '/api/matches/mine')).body.requests).toEqual([]);
+  };
+  await check();
+  expect((await mutate(owner, `/api/conversations/${accepted.body.request.conversationId}/close`)).status).toBe(204);
+  await check();
+});
+
+test.each(['owner', 'requester'])('requesting again after %s closes a lost-item chat requires fresh consent', async (closer) => {
+  const owner = await identity(), finder = await identity(), p = await post(owner, 'lost');
+  const first = (await mutate(finder, `/api/posts/${p._id}/matches`)).body.request;
+  const accepted = await mutate(owner, `/api/posts/${p._id}/matches/${first.id}/decision`, { decision: 'accept' });
+  const oldConversation = accepted.body.request.conversationId;
+  // Retrying an active request must not create another pending request.
+  expect((await mutate(finder, `/api/posts/${p._id}/matches`)).body.request.status).toBe('accepted');
+  await mutate(closer === 'owner' ? owner : finder, `/api/conversations/${oldConversation}/close`);
+  const renewed = await mutate(finder, `/api/posts/${p._id}/matches`);
+  expect(renewed.status).toBe(201);
+  expect(renewed.body.request).toMatchObject({ id: first.id, status: 'pending', conversationId: null });
+  expect((await get(owner, '/api/matches/incoming')).body.requests.map(row => row.id)).toEqual([first.id]);
+  expect((await get(finder, '/api/matches/mine')).body.requests.map(row => row.id)).toEqual([first.id]);
+  expect((await get(owner, '/api/notifications?unread=true')).body.notifications).toHaveLength(1);
+  expect((await mutate(finder, `/api/posts/${p._id}/matches`)).status).toBe(200);
+  expect(await Notification.countDocuments({ kind: 'match_submitted' })).toBe(1);
+  const second = await mutate(owner, `/api/posts/${p._id}/matches/${first.id}/decision`, { decision: 'accept' });
+  expect(second.status).toBe(200);
+  expect(second.body.request.conversationId).not.toBe(oldConversation);
+  expect((await get(finder, `/api/conversations/${second.body.request.conversationId}`)).status).toBe(200);
+  for (const person of [owner, finder]) {
+    expect((await get(person, `/api/conversations/${oldConversation}/messages`)).status).toBe(404);
+  }
+  expect(await Notification.countDocuments({ kind: 'match_accepted' })).toBe(1);
+});
+
+test('conversation request rate limits are per account and expire after one minute', async () => {
+  const owner = await identity(), finder = await identity(), other = await identity();
+  const p = await post(owner, 'lost');
+  const now = Date.now();
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+  try {
+    for (let i = 0; i < 10; i++) {
+      expect((await mutate(finder, `/api/posts/${p._id}/matches`)).status).toBe(i === 0 ? 201 : 200);
+    }
+    const fresh = await post(owner, 'lost');
+    const blocked = await mutate(finder, `/api/posts/${fresh._id}/matches`);
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
+    expect(Number(blocked.headers['retry-after'])).toBeLessThanOrEqual(60);
+    expect((await mutate(other, `/api/posts/${fresh._id}/matches`)).status).toBe(201);
+    clock.mockReturnValue(now + 60000);
+    expect((await mutate(finder, `/api/posts/${fresh._id}/matches`)).status).toBe(201);
+  } finally { clock.mockRestore(); }
+});
+
+test('denial notifies only the requester once and notification failure rolls back the decision', async () => {
+  const owner = await identity(), finder = await identity(), stranger = await identity(), p = await post(owner, 'lost');
+  const match = (await mutate(finder, `/api/posts/${p._id}/matches`)).body.request;
+  const endpoint = `/api/posts/${p._id}/matches/${match.id}/decision`;
+  const spy = jest.spyOn(Notification, 'create').mockRejectedValueOnce(new Error('notification failure'));
+  try {
+    expect((await mutate(owner, endpoint, { decision: 'deny' })).status).toBe(500);
+  } finally { spy.mockRestore(); }
+  expect((await MatchRequest.findById(match.id)).status).toBe('pending');
+  expect(await Notification.countDocuments({ kind: 'match_denied' })).toBe(0);
+  expect((await mutate(owner, endpoint, { decision: 'deny' })).status).toBe(200);
+  expect((await mutate(owner, endpoint, { decision: 'deny' })).status).toBe(409);
+  const notes = await get(finder, '/api/notifications?unread=true');
+  expect(notes.body.notifications).toHaveLength(1);
+  expect(notes.body.notifications[0]).toMatchObject({ kind: 'match_denied', matchRequestId: match.id, claimId: null, readAt: null });
+  expect((await get(stranger, '/api/notifications')).body.notifications).toEqual([]);
+  expect(await Notification.countDocuments({ kind: 'match_denied' })).toBe(1);
+  expect(await Notification.countDocuments({ recipient: owner.user._id, kind: 'match_denied' })).toBe(0);
+});
+
+test('a failed renewed request preserves the closed conversation and previous request state', async () => {
+  const owner = await identity(), finder = await identity(), p = await post(owner, 'lost');
+  const first = (await mutate(finder, `/api/posts/${p._id}/matches`)).body.request;
+  const accepted = await mutate(owner, `/api/posts/${p._id}/matches/${first.id}/decision`, { decision: 'accept' });
+  const conversationId = accepted.body.request.conversationId;
+  await mutate(owner, `/api/conversations/${conversationId}/close`);
+  const spy = jest.spyOn(Notification, 'create').mockRejectedValueOnce(new Error('notification failure'));
+  try {
+    expect((await mutate(finder, `/api/posts/${p._id}/matches`)).status).toBe(500);
+  } finally { spy.mockRestore(); }
+  expect((await MatchRequest.findById(first.id)).status).toBe('accepted');
+  expect(String((await Conversation.findById(conversationId)).matchRequest)).toBe(first.id);
+  expect(await Notification.countDocuments()).toBe(2);
+  expect((await mutate(finder, `/api/posts/${p._id}/matches`)).status).toBe(201);
+});
+
+test('a question-free found post supports request acceptance, private messaging, and return', async () => {
+  const owner = await identity(), claimant = await identity();
+  const p = await post(owner, 'found');
+  await Post.updateOne({ _id: p._id }, { $set: { verificationQuestions: [] } });
+  const match = await mutate(claimant, `/api/posts/${p._id}/matches`);
+  expect(match.status).toBe(201);
+  expect((await get(owner, '/api/matches/incoming')).body.requests[0].id).toBe(match.body.request.id);
+  const accepted = await mutate(owner, `/api/posts/${p._id}/matches/${match.body.request.id}/decision`, { decision: 'accept' });
+  expect(accepted.status).toBe(200);
+  const conversation = await Conversation.findById(accepted.body.request.conversationId);
+  const socket = await connect(claimant);
+  expect((await join(socket, conversation)).ok).toBe(true);
+  expect((await send(socket, conversation, 'Can we discuss identifying details?')).ok).toBe(true);
+  const latest = await Post.findById(p._id);
+  expect((await mutate(owner, `/api/posts/${p._id}/return`, { revision: latest.revision })).status).toBe(204);
+  expect((await Post.findById(p._id)).status).toBe('returned');
 });

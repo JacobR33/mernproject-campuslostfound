@@ -15,7 +15,6 @@ const authModels = require('../../../server/src/models/auth');
 const Upload = require('../../../server/src/models/upload');
 const Notification = require('../../../server/src/models/notification');
 const { hashPassword } = require('../../../server/src/lib/authCrypto');
-const { hashQuestions } = require('../../../server/src/lib/verificationAnswers');
 const { createGridFSStorage } = require('../../../server/src/storage/gridfs');
 const mailFile = path.resolve(__dirname, '../../../.tools/e2e-mail.json');
 const controlFile = path.resolve(__dirname, '../../../.tools/e2e-control.json');
@@ -37,7 +36,7 @@ const stopFile = path.resolve(__dirname, '../../../.tools/e2e-stop');
     await models.Post.create({ type: 'lost', author: owner._id, item: row._id, expiresAt: new Date(Date.now() + 86400000) });
   }
   const item = await models.Item.create({ category: 'bags', title: 'Black campus backpack', publicDescription: 'A backpack was found near the library.', privateDetails: 'do-not-disclose-e2e', dateFoundOrLost: new Date('2026-10-01T12:00:00Z'), locationFound: { campusArea: 'Main Campus', buildingName: 'Library' } });
-  const post = await models.Post.create({ type: 'found', author: finder._id, item: item._id, expiresAt: new Date(Date.now() + 86400000), verificationQuestions: await hashQuestions([{ question: 'What color is the lining?', answer: 'Navy blue' }, { question: 'What is the hidden sticker?', answer: 'Small silver star' }]) });
+  const post = await models.Post.create({ type: 'found', author: finder._id, item: item._id, expiresAt: new Date(Date.now() + 86400000) });
   const image = await Upload.create({ owner: finder._id, post: post._id, filename: `${randomBytes(24).toString('hex')}.jpg`, state: 'attached', expiresAt: post.expiresAt });
   const storage = createGridFSStorage(); await storage.write(image._id, await sharp({ create: { width: 800, height: 500, channels: 3, background: '#ddd9c6' } }).jpeg().toBuffer(), image.filename);
   await models.Item.updateOne({ _id: item._id }, { $set: { images: [image._id] } });

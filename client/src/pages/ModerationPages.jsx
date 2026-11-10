@@ -357,10 +357,12 @@ export function AdminRemovePost({ postId, authorId }) {
       <p className="small">
         Author account ID: <code className="wrap-id">{authorId}</code>
       </p>
-      <Link to="/admin">Open moderation</Link>
-      <button className="button danger" onClick={() => setConfirm(true)}>
-        Remove post as admin
-      </button>
+      <div className="actions">
+        <Link to="/admin">Open moderation</Link>
+        <button className="button danger" onClick={() => setConfirm(true)}>
+          Remove post
+        </button>
+      </div>
       {confirm && (
         <Confirm
           title="Remove this post?"

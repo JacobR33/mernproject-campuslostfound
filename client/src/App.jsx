@@ -1,6 +1,6 @@
 import { MfaSettings } from './pages/MfaSettings';
 import React, { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { api } from './api';
 import { AuthProvider, RequireAuth, useAuth } from './auth';
 import { useAction, useResource } from './hooks';
@@ -10,7 +10,11 @@ import { Admin, DeleteAccount } from './pages/ModerationPages';
 import { ChatPage, MatchPage } from './pages/ChatPages';
 import { EmailRequest, LinkAction, Login, Register } from './pages/AuthPages';
 import { MyPosts, PostDetail, PostEditor } from './pages/PostPages';
-import { ClaimPage, FinderReview, MyClaims, Notifications } from './pages/ClaimPages';
+import { ClaimDestination, Notifications } from './pages/ClaimPages';
+function LegacyClaimRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/posts/${id}/match`} replace />;
+}
 function Header() {
   const auth = useAuth();
   const location = useLocation();
@@ -60,7 +64,6 @@ function Header() {
           {auth.user ? (
             <>
               <NavLink to="/my-posts">My Posts</NavLink>
-              <NavLink to="/my-claims">My Claims</NavLink>
               <NavLink to="/chat">Chat</NavLink>
               <NavLink to="/notifications" className="notification-link" aria-label="Notifications">
                 <Icon name="bell" />
@@ -171,10 +174,11 @@ function Shell({ actionLink }) {
           <Route path="/found/new" element={protect(<PostEditor type="found" />)} />
           <Route path="/lost/new" element={protect(<PostEditor type="lost" />)} />
           <Route path="/posts/:id/edit" element={protect(<PostEditor />)} />
-          <Route path="/posts/:id/claim" element={protect(<ClaimPage />)} />
-          <Route path="/posts/:id/review" element={protect(<FinderReview />)} />
+          <Route path="/posts/:id/claim" element={protect(<LegacyClaimRedirect />)} />
+          <Route path="/posts/:id/review" element={protect(<Navigate to="/chat" replace />)} />
           <Route path="/my-posts" element={protect(<MyPosts />)} />
-          <Route path="/my-claims" element={protect(<MyClaims />)} />
+          <Route path="/my-claims" element={protect(<Navigate to="/notifications" replace />)} />
+          <Route path="/claims/:claimId" element={protect(<ClaimDestination />)} />
           <Route path="/notifications" element={protect(<Notifications />)} />
           <Route path="/settings" element={protect(<Settings />)} />
           <Route path="/chat" element={protect(<ChatPage />)} />

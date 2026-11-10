@@ -1,11 +1,13 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { AuthProvider, RequireAuth } from '../src/auth';
 import { Login, LinkAction } from '../src/pages/AuthPages';
-import { ClaimPage } from '../src/pages/ClaimPages';
+import { ClaimDestination, Notifications } from '../src/pages/ClaimPages';
 import { api } from '../src/api';
+import { MatchPage } from '../src/pages/ChatPages';
+import { PostDetail, PostEditor } from '../src/pages/PostPages';
 jest.mock('../src/api', () => ({ api: { get: jest.fn(), post: jest.fn(), login: jest.fn(), subscribe: jest.fn(() => () => {}), session: jest.fn(), asset: jest.fn(() => ''), resetPassword: jest.fn() } }));
 const id = 'a'.repeat(24);
 function wrapper(element, authenticated = false) {
@@ -13,6 +15,13 @@ function wrapper(element, authenticated = false) {
   return render(<MemoryRouter><AuthProvider>{element}</AuthProvider></MemoryRouter>);
 }
 beforeEach(() => { jest.clearAllMocks(); api.subscribe.mockImplementation(() => () => {}); });
+
+test('denied conversation notifications explain the decision and link to sent requests', async () => {
+  api.get.mockResolvedValue({ notifications: [{ id, kind: 'match_denied', postId: id, matchRequestId: id, readAt: null }] });
+  wrapper(<Notifications />, true);
+  expect(await screen.findByText('Your conversation request was denied')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'View Campus chat' })).toHaveAttribute('href', '/chat?direction=mine');
+});
 test('private pages do not render sensitive content before authentication resolves', async () => {
   let resolve; api.session.mockReturnValue(new Promise(done => { resolve = done; }));
   render(<MemoryRouter><AuthProvider><RequireAuth><p>private-answer-sentinel</p></RequireAuth></AuthProvider></MemoryRouter>);
@@ -42,9 +51,55 @@ test('expired verification links offer a recovery route without exposing the tok
   await screen.findByText(/This link is invalid, expired/);
   expect(screen.getByRole('link', { name: 'Request a new link' })).toHaveAttribute('href', '/resend-verification');
 });
-test('submitted question HTML is rendered as text and a three-attempt claimant cannot submit again', async () => {
-  api.get.mockImplementation(path => Promise.resolve(path.endsWith('/my-claim') ? { claim: { attemptCount: 3, status: 'pending' } } : { post: { id, author: { id: 'finder' }, item: { title: '<script>sentinel()</script>' }, acceptingClaims: true, verificationQuestions: [] } }));
-  wrapper(<ClaimPage />, true);
-  await screen.findByText('<script>sentinel()</script>'); expect(document.querySelector('script')).toBeNull();
-  expect(await screen.findByText(/used all three attempts/)).toBeInTheDocument(); expect(screen.queryByRole('button', { name: /Submit/ })).not.toBeInTheDocument();
+const foundPost = {
+  id, type: 'found', status: 'claim_pending', acceptingMatches: true,
+  author: { id: 'finder', displayName: 'Finder' },
+  item: { title: 'Found keys', publicDescription: 'Keys near the library', category: 'keys', images: [], dateFoundOrLost: '2026-11-01', locationFound: { campusArea: 'Main' } },
+};
+function claimRoutes(element, route = `/posts/${id}`) {
+  api.session.mockResolvedValue({ id: 'claimant', role: 'user' });
+  return render(<MemoryRouter initialEntries={[route]}><AuthProvider><Routes>
+    <Route path="/posts/:id" element={element} />
+    <Route path="/claims/:claimId" element={<ClaimDestination />} />
+    <Route path="/chat/:conversationId" element={<p>Private chat destination</p>} />
+  </Routes></AuthProvider></MemoryRouter>);
+}
+test('found posts offer conversation requests instead of verification forms', async () => {
+  api.get.mockResolvedValue({ post: foundPost });
+  claimRoutes(<PostDetail />);
+  expect(await screen.findByRole('link', { name: 'This might be mine' })).toHaveAttribute('href', `/posts/${id}/match`);
+  expect(api.get.mock.calls.some(([path]) => path.includes('/my-claim'))).toBe(false);
+});
+test('found item creation has no ownership questions or private answers', async () => {
+  wrapper(<PostEditor type="found" />, true);
+  expect(await screen.findByRole('button', { name: 'Publish post' })).toBeInTheDocument();
+  await waitFor(() => expect(api.session).toHaveBeenCalled());
+  expect(screen.queryByText('Private ownership verification')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(/Private answer/)).not.toBeInTheDocument();
+});
+test.each([
+  ['claim_approved', 'View conversation', `/claims/${id}`],
+  ['claim_denied', 'View post', `/posts/${id}`],
+])('%s notifications link to their replacement destination', async (kind, label, href) => {
+  api.get.mockResolvedValue({ notifications: [{ id, kind, postId: id, claimId: id, attemptCount: 1 }] });
+  wrapper(<Notifications />, true);
+  expect(await screen.findByRole('link', { name: label })).toHaveAttribute('href', href);
+});
+test('approved claim destination resolves the private conversation', async () => {
+  api.get.mockResolvedValue({ claim: { post: { id }, conversationId: 'conversation1' } });
+  claimRoutes(<PostDetail />, `/claims/${id}`);
+  expect(await screen.findByText('Private chat destination')).toBeInTheDocument();
+});
+
+test('found-item requests submit without ownership questions or answers', async () => {
+  api.session.mockResolvedValue({ id: 'claimant', role: 'user' });
+  api.get.mockResolvedValue({ post: foundPost });
+  api.post.mockResolvedValue({ request: { id: 'request1', status: 'pending' } });
+  render(<MemoryRouter initialEntries={[`/posts/${id}/match`]}><AuthProvider><Routes>
+    <Route path="/posts/:id/match" element={<RequireAuth><MatchPage /></RequireAuth>} />
+    <Route path="/chat" element={<p>Your sent requests</p>} />
+  </Routes></AuthProvider></MemoryRouter>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Request a private conversation' }));
+  expect(api.post).toHaveBeenCalledWith(`/api/posts/${id}/matches`, {}, expect.objectContaining({ auth: true }));
+  expect(await screen.findByText('Your sent requests')).toBeInTheDocument();
 });

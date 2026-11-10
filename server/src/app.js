@@ -128,7 +128,12 @@ function createApp(
     };
     res
       .status(status)
-      .json({ error: messages[status] || 'Internal server error', requestId: req.id });
+      .json({
+        error: messages[status] || 'Internal server error',
+        ...(status === 409 && err.code === 'REQUEST_DENIED' ? { code: 'REQUEST_DENIED' } : {}),
+        ...(status === 429 && err.code === 'CLAIM_ATTEMPT_LIMIT' ? { code: 'CLAIM_ATTEMPT_LIMIT' } : {}),
+        requestId: req.id,
+      });
   });
   return app;
 }

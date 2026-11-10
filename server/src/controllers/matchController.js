@@ -2,6 +2,7 @@ const { lockActor } = require('../lib/lockActor');
 const mongoose = require('mongoose');
 const { Post, Item, User, Conversation } = require('../models');
 const MatchRequest = require('../models/matchRequest');
+const Notification = require('../models/notification');
 const { withTransaction } = require('../lib/transaction');
 const { httpError } = require('../lib/httpError');
 const { pageDTO } = require('./claimController');
@@ -28,10 +29,9 @@ function createMatchController(logger) {
         const post = await Post.findOneAndUpdate(
           {
             _id: req.validated.params.postId,
-            type: 'lost',
+            type: trusted({ $in: ['lost', 'found'] }),
             author: trusted({ $ne: req.user._id }),
-            status: 'open',
-            approvedMatch: null,
+            status: trusted({ $in: ['open', 'claim_pending'] }),
             ...live(),
           },
           { $inc: { chatVersion: 1 } },
@@ -49,13 +49,41 @@ function createMatchController(logger) {
           session
         );
         if (row?.status === 'denied') {
-          throw httpError(409, 'Request already resolved');
+          throw Object.assign(httpError(409, 'Request was denied'), { code: 'REQUEST_DENIED' });
+        }
+        if (row?.status === 'accepted') {
+          // A closed chat needs fresh owner consent and a new conversation.
+          // Release the old proof link without reopening its message history.
+          const closed = await Conversation.updateOne(
+            { _id: row.conversation, matchRequest: row._id, closedAt: trusted({ $ne: null }) },
+            { $unset: { matchRequest: 1 } },
+            { session }
+          );
+          if (closed.matchedCount) {
+            row = await MatchRequest.findOneAndUpdate(
+              { _id: row._id, status: 'accepted' },
+              { $set: { status: 'pending', conversation: null }, $unset: { decidedAt: 1 } },
+              { new: true, session }
+            );
+            // Replace the previous request cycle's notices with a fresh unread one.
+            await Notification.deleteMany(
+              { claim: row._id, kind: trusted({ $in: ['match_submitted', 'match_accepted'] }) },
+              { session }
+            );
+            created = true;
+          }
         }
         if (!row) {
           [row] = await MatchRequest.create([{ post: post._id, requester: req.user._id }], {
             session,
           });
           created = true;
+        }
+        if (created) {
+          await Notification.create(
+            [{ recipient: post.author, post: post._id, claim: row._id, kind: 'match_submitted', attemptCount: 1 }],
+            { session }
+          );
         }
         const item = await Item.findById(post.item).select('title').session(session);
         if (!item) {
@@ -74,7 +102,7 @@ function createMatchController(logger) {
     async list(req, res, incoming) {
       const query = req.validated.query;
       const [page] = await MatchRequest.aggregate([
-        { $match: incoming ? {} : { requester: req.user._id } },
+        { $match: { status: { $ne: 'accepted' }, ...(incoming ? {} : { requester: req.user._id }) } },
         {
           $lookup: {
             from: 'posts',
@@ -83,7 +111,7 @@ function createMatchController(logger) {
             pipeline: [
               {
                 $match: {
-                  type: 'lost',
+                  type: { $in: ['lost', 'found'] },
                   deletedAt: null,
                   expiresAt: { $gt: new Date() },
                   ...(incoming ? { author: req.user._id } : {}),
@@ -155,10 +183,9 @@ function createMatchController(logger) {
         const post = await Post.findOneAndUpdate(
           {
             _id: req.validated.params.postId,
-            type: 'lost',
+            type: trusted({ $in: ['lost', 'found'] }),
             author: req.user._id,
-            status: 'open',
-            approvedMatch: null,
+            status: trusted({ $in: ['open', 'claim_pending'] }),
             ...live(),
           },
           { $inc: { revision: 1 }, $set: { updatedAt: new Date() } },
@@ -205,11 +232,6 @@ function createMatchController(logger) {
           if (!saved.matchedCount) {
             throw httpError(409, 'Resource changed');
           }
-          await MatchRequest.updateMany(
-            { post: post._id, _id: trusted({ $ne: row._id }), status: 'pending' },
-            { $set: { status: 'denied', decidedAt: new Date() } },
-            { session }
-          );
         }
         const updated = await MatchRequest.findOneAndUpdate(
           { _id: row._id, post: post._id, status: 'pending' },
@@ -225,6 +247,10 @@ function createMatchController(logger) {
         if (!updated) {
           throw httpError(409, 'Resource changed');
         }
+        await Notification.create(
+          [{ recipient: row.requester, post: post._id, claim: row._id, kind: conversation ? 'match_accepted' : 'match_denied', attemptCount: 1 }],
+          { session }
+        );
         const item = await Item.findById(post.item).select('title').session(session);
         if (!item) {
           throw httpError(404, 'Not found');

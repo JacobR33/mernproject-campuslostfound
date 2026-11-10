@@ -69,7 +69,7 @@ export function Browse() {
             <p className="eyebrow">THE CAMPUS BOARD</p>
             <h2 id="browse-title">A place to reconnect.</h2>
           </div>
-          <p className="muted">Public clues. Private verification.</p>
+          <p className="muted">Public clues. Private conversations.</p>
         </div>
         <div className="tabs" aria-label="Post type">
           {[
@@ -107,7 +107,7 @@ export function Browse() {
               <option value="">All categories</option>
               {categories.map((value) => (
                 <option key={value} value={value}>
-                  {titleCase(value)}
+                  {value === 'claim_pending' ? 'Conversation active' : titleCase(value)}
                 </option>
               ))}
             </select>
@@ -132,7 +132,7 @@ export function Browse() {
                   <option value="">All statuses</option>
                   {['open', 'claim_pending', 'returned', 'closed'].map((value) => (
                     <option key={value} value={value}>
-                      {titleCase(value)}
+                      {value === 'claim_pending' ? 'Conversation active' : titleCase(value)}
                     </option>
                   ))}
                 </select>
@@ -190,13 +190,13 @@ export function Browse() {
             ],
             [
               '02',
-              'Verify privately',
-              'Found-item questions help the finder recognize the right owner.',
+              'Request a conversation',
+              'Ask the post owner to accept a private conversation request.',
             ],
             [
               '03',
               'Bring it back together',
-              'The finder reviews the claim and confirms the return.',
+              'Discuss identifying details privately and confirm the return.',
             ],
           ].map(([number, title, text]) => (
             <article key={number}>

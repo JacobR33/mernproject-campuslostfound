@@ -6,7 +6,7 @@ const { httpError } = require('../lib/httpError');
 const { trusted } = mongoose;
 function accessPipeline(userId, id) {
   return [
-    { $match: { participants: userId, ...(id ? { _id: new mongoose.Types.ObjectId(id) } : {}) } },
+    { $match: { closedAt: null, participants: userId, ...(id ? { _id: new mongoose.Types.ObjectId(id) } : {}) } },
     { $match: { $expr: { $eq: [{ $size: '$participants' }, 2] } } },
     {
       $lookup: {
@@ -18,7 +18,7 @@ function accessPipeline(userId, id) {
             $match: {
               deletedAt: null,
               expiresAt: { $gt: new Date() },
-              status: { $in: ['claim_pending', 'returned'] },
+              status: { $in: ['open', 'claim_pending', 'returned'] },
             },
           },
           {
@@ -92,7 +92,6 @@ function accessPipeline(userId, id) {
             {
               $and: [
                 { $eq: ['$post.type', 'found'] },
-                { $eq: ['$post.approvedClaim', '$claim'] },
                 { $eq: ['$proof.post', '$post._id'] },
                 { $eq: ['$proof.conversation', '$_id'] },
                 { $in: ['$proof.claimant', '$participants'] },
@@ -101,8 +100,7 @@ function accessPipeline(userId, id) {
             },
             {
               $and: [
-                { $eq: ['$post.type', 'lost'] },
-                { $eq: ['$post.approvedMatch', '$matchRequest'] },
+                { $in: ['$post.type', ['lost', 'found']] },
                 { $eq: ['$matchProof.post', '$post._id'] },
                 { $eq: ['$matchProof.conversation', '$_id'] },
                 { $in: ['$matchProof.requester', '$participants'] },
@@ -204,7 +202,7 @@ async function saveMessage(identity, value) {
       throw Object.assign(new Error('Authentication required'), { authStatus: 401 });
     }
     const conversation = await Conversation.findOneAndUpdate(
-      { _id: value.conversationId, participants: identity.user._id },
+      { _id: value.conversationId, participants: identity.user._id, closedAt: null },
       { $inc: { messageSequence: 1 }, $set: { updatedAt: new Date() } },
       { new: true, session }
     );
