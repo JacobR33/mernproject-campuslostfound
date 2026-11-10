@@ -1,0 +1,43 @@
+{
+  "name": "@ucf/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "jest --runInBand",
+    "db:indexes": "node scripts/create-indexes.js",
+    "admin:grant": "node scripts/grant-admin.cjs"
+  },
+  "dependencies": {
+    "bcryptjs": "3.0.3",
+    "cookie-parser": "1.4.7",
+    "cors": "2.8.5",
+    "dotenv": "16.6.1",
+    "express": "4.22.3",
+    "express-mongo-sanitize": "2.2.0",
+    "helmet": "8.1.0",
+    "hpp": "0.2.3",
+    "jsonwebtoken": "9.0.3",
+    "mongoose": "8.24.8",
+    "multer": "2.5.0",
+    "nodemailer": "10.3.1",
+    "otpauth": "9.6.0",
+    "proxy-addr": "2.0.8",
+    "qrcode": "1.5.4",
+    "sharp": "0.35.5",
+    "socket.io": "4.8.4",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "jest": "30.5.2",
+    "mongodb-memory-server": "11.3.0",
+    "socket.io-client": "4.8.4",
+    "supertest": "7.1.4"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "clearMocks": true
+  }
+}

@@ -1,0 +1,64 @@
+name: Deploy Droplet
+
+on:
+  push:
+    branches: [Frontend]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: campus-lost-found-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/Frontend'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: gianni
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST"
+          test -n "$SSH_KEY"
+          test -n "$KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          printf 'Host *\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n' > ~/.ssh/config
+      - name: Upload release
+        run: |
+          set -euo pipefail
+          mkdir -p release/client
+          cp package.json package-lock.json release/
+          cp client/package.json release/client/
+          cp -R client/dist release/client/
+          mkdir -p release/server
+          rsync -a --exclude='.env*' --exclude='node_modules/' --exclude='uploads/' server/ release/server/
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /home/gianni/.campus-deploy-staging'
+          rsync -az --delete release/ "$DEPLOY_USER@$DEPLOY_HOST:/home/gianni/.campus-deploy-staging/"
+      - name: Apply release and check backend
+        run: ssh "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' < scripts/deploy-droplet.sh
+      - name: Remove SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
